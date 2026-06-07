@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Meetup Finder — Issaquah, WA</title>
+    <title>Meetup Finder</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
     <link rel="stylesheet" href="/styles.css">
@@ -13,12 +13,44 @@
 <!-- ── Header ─────────────────────────────────────────────────────────────── -->
 <header class="app-header">
     <h1><i class="fas fa-map-location-dot"></i> Meetup Finder</h1>
-    <p class="header-sub">Discover local groups &amp; upcoming events near you</p>
-    <div class="header-chips">
-        <span class="chip"><i class="fas fa-location-dot"></i> Issaquah, WA</span>
-        <span class="chip"><i class="fas fa-circle-notch"></i> Within 5 Miles</span>
-        <span class="chip"><i class="fas fa-table-tennis-paddle-ball"></i> Tennis</span>
-        <span class="chip"><i class="fas fa-flask"></i> Science</span>
+    <p class="header-sub">Enter your zip code to discover local groups &amp; events near you</p>
+
+    <!-- Search form -->
+    <div class="search-form" id="search-form">
+
+        <!-- Row 1: location -->
+        <div class="search-row">
+            <button class="btn-locate" id="btn-locate" title="Use my current location">
+                <i class="fas fa-location-crosshairs"></i>
+                <span id="locate-label">Use my location</span>
+            </button>
+            <span class="search-divider">or</span>
+            <div class="zip-wrap">
+                <i class="fas fa-location-dot zip-icon"></i>
+                <input type="text" id="zip-input" maxlength="5" inputmode="numeric"
+                       placeholder="Enter zip code" autocomplete="postal-code">
+            </div>
+            <select id="radius-select" class="radius-select">
+                <option value="5">5 miles</option>
+                <option value="10">10 miles</option>
+                <option value="25">25 miles</option>
+            </select>
+            <button class="btn-search" id="btn-search">
+                <i class="fas fa-magnifying-glass"></i> Search
+            </button>
+        </div>
+
+        <!-- Row 2: topic checkboxes -->
+        <div class="topics-row" id="topics-row">
+            <span class="topics-label">Topics:</span>
+            <div class="topic-checks" id="topic-checks">
+                <!-- populated by JS -->
+                <span class="topics-loading"><i class="fas fa-circle-notch fa-spin"></i></span>
+            </div>
+        </div>
+
+        <!-- Location display -->
+        <div id="location-chip" class="location-chip hidden"></div>
     </div>
 </header>
 
@@ -32,9 +64,9 @@
         <i class="fas fa-users" style="color:#10b981"></i>
         <span><strong id="stat-members">—</strong> Members</span>
     </div>
-    <div class="stat">
+    <div class="stat" id="stat-radius-wrap">
         <i class="fas fa-route" style="color:#f59e0b"></i>
-        <span>Radius: <strong>5 miles</strong></span>
+        <span>Radius: <strong id="stat-radius">—</strong></span>
     </div>
     <div class="stat">
         <span id="source-badge" class="source-badge source-loading">
@@ -43,7 +75,7 @@
         <span id="fetched-at" class="fetched-at"></span>
     </div>
     <div class="stat" style="margin-left:auto">
-        <button id="btn-refresh" class="btn-refresh">
+        <button id="btn-refresh" class="btn-refresh" disabled>
             <i class="fas fa-rotate-right"></i> Refresh
         </button>
     </div>
@@ -52,79 +84,71 @@
 <!-- ── Main ───────────────────────────────────────────────────────────────── -->
 <main class="main-wrap">
 
-    <div class="live-banner">
-        <div>
-            <strong><i class="fas fa-arrow-up-right-from-square"></i> Find Live Events on Meetup.com</strong>
-            <span class="banner-sub">Real-time events near Issaquah, WA</span>
+    <!-- Prompt shown before first search -->
+    <div id="prompt-state" class="prompt-state">
+        <i class="fas fa-map-location-dot fa-3x"></i>
+        <h2>Find meetups near you</h2>
+        <p>Enter a zip code above (or use your location) and pick the topics you're interested in.</p>
+    </div>
+
+    <!-- Results (hidden until search) -->
+    <div id="results-wrap" class="hidden">
+
+        <div class="live-banner" id="live-banner">
+            <div>
+                <strong><i class="fas fa-arrow-up-right-from-square"></i> Find Live Events on Meetup.com</strong>
+                <span class="banner-sub" id="banner-location-label">Near your location</span>
+            </div>
+            <div class="banner-links" id="banner-links">
+                <!-- populated by JS -->
+            </div>
         </div>
-        <div class="banner-links">
-            <a href="https://www.meetup.com/find/?keywords=tennis&location=Issaquah%2C+WA&source=EVENTS&distance=fiveMiles"
-               target="_blank" rel="noopener" class="banner-btn">
-                <i class="fas fa-table-tennis-paddle-ball"></i> Tennis
-            </a>
-            <a href="https://www.meetup.com/find/?keywords=science&location=Issaquah%2C+WA&source=EVENTS&distance=fiveMiles"
-               target="_blank" rel="noopener" class="banner-btn">
-                <i class="fas fa-flask"></i> Science
-            </a>
+
+        <div class="controls-row">
+            <div class="filter-tabs" id="filter-tabs">
+                <!-- populated by JS -->
+            </div>
+            <div class="sort-wrap">
+                <label for="sort-select"><i class="fas fa-sort"></i></label>
+                <select id="sort-select">
+                    <option value="distance">Nearest first</option>
+                    <option value="members">Most members</option>
+                    <option value="attending">Most attending</option>
+                    <option value="name">A – Z</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="content-grid">
+            <section class="cards-panel" id="cards-panel">
+                <div class="loading-state hidden" id="loading-state">
+                    <i class="fas fa-circle-notch fa-spin fa-2x"></i>
+                    <p>Fetching meetups…</p>
+                </div>
+                <div class="error-state hidden" id="error-state">
+                    <i class="fas fa-triangle-exclamation fa-2x"></i>
+                    <p id="error-msg">Could not load meetups.</p>
+                    <button class="btn-retry" onclick="doSearch()">Try again</button>
+                </div>
+                <div id="cards"></div>
+            </section>
+
+            <section class="map-panel">
+                <div id="map"></div>
+                <div class="map-legend" id="map-legend">
+                    <div class="leg-row"><span class="ldot red"></span> You</div>
+                </div>
+            </section>
         </div>
     </div>
 
-    <div class="controls-row">
-        <div class="filter-tabs" id="filter-tabs">
-            <button class="ftab active" data-topic="all">
-                <i class="fas fa-border-all"></i> All
-                <span class="ftab-count" id="cnt-all">—</span>
-            </button>
-            <button class="ftab" data-topic="tennis">
-                <i class="fas fa-table-tennis-paddle-ball"></i> Tennis
-                <span class="ftab-count tennis-cnt" id="cnt-tennis">—</span>
-            </button>
-            <button class="ftab" data-topic="science">
-                <i class="fas fa-flask"></i> Science
-                <span class="ftab-count science-cnt" id="cnt-science">—</span>
-            </button>
-        </div>
-        <div class="sort-wrap">
-            <label for="sort-select"><i class="fas fa-sort"></i></label>
-            <select id="sort-select">
-                <option value="distance">Nearest first</option>
-                <option value="members">Most members</option>
-                <option value="attending">Most attending</option>
-                <option value="name">A – Z</option>
-            </select>
-        </div>
-    </div>
-
-    <div class="content-grid">
-        <section class="cards-panel" id="cards-panel">
-            <div class="loading-state" id="loading-state">
-                <i class="fas fa-circle-notch fa-spin fa-2x"></i>
-                <p>Fetching meetups…</p>
-            </div>
-            <div class="error-state hidden" id="error-state">
-                <i class="fas fa-triangle-exclamation fa-2x"></i>
-                <p id="error-msg">Could not load meetups.</p>
-                <button class="btn-retry" onclick="loadMeetups()">Try again</button>
-            </div>
-            <div id="cards"></div>
-        </section>
-
-        <section class="map-panel">
-            <div id="map"></div>
-            <div class="map-legend">
-                <div class="leg-row"><span class="ldot green"></span> Tennis</div>
-                <div class="leg-row"><span class="ldot blue"></span> Science</div>
-                <div class="leg-row"><span class="ldot red"></span> Center</div>
-            </div>
-        </section>
-    </div>
 </main>
 
 <footer class="app-footer">
     Data shown may be sample/demo. For live events visit
     <a href="https://www.meetup.com" target="_blank" rel="noopener">Meetup.com</a>.
     &nbsp;|&nbsp; API: <code>/api/meetups</code> &nbsp;·&nbsp;
-    <code>/api/reminders</code> &nbsp;·&nbsp; <code>/api/status</code>
+    <code>/api/reminders</code> &nbsp;·&nbsp; <code>/api/geocode</code>
 </footer>
 
 <!-- ═══════════════════════════════════════════════════════════════════════════
@@ -133,12 +157,10 @@
 <div class="modal-overlay hidden" id="reminder-modal" role="dialog" aria-modal="true">
     <div class="modal-card">
 
-        <!-- Close button -->
         <button class="modal-close" id="modal-close" aria-label="Close">
             <i class="fas fa-xmark"></i>
         </button>
 
-        <!-- Event info header (always visible) -->
         <div class="modal-header" id="modal-header">
             <div class="modal-bell-icon" id="modal-bell-icon">
                 <i class="fas fa-bell"></i>
@@ -148,51 +170,33 @@
             <p id="modal-event-venue" class="modal-event-venue"></p>
         </div>
 
-        <!-- ── Panel A: Set reminder form ─────────────────────────────────── -->
+        <!-- Panel A: Set reminder form -->
         <div id="panel-form">
             <p class="panel-label">Notify me via</p>
-
             <div class="input-group">
                 <i class="fas fa-envelope field-icon"></i>
-                <input type="email" id="input-email" placeholder="Email address (optional)"
-                       autocomplete="email">
+                <input type="email" id="input-email" placeholder="Email address (optional)" autocomplete="email">
             </div>
             <div class="input-group">
                 <i class="fas fa-mobile-screen-button field-icon"></i>
-                <input type="tel" id="input-phone" placeholder="US phone for SMS (optional)"
-                       autocomplete="tel">
+                <input type="tel" id="input-phone" placeholder="US phone for SMS (optional)" autocomplete="tel">
             </div>
-
             <p class="panel-label" style="margin-top:1.1rem">Remind me before the event</p>
             <div class="interval-grid">
                 <label class="interval-opt">
                     <input type="checkbox" name="interval" value="24" checked>
-                    <span class="interval-box">
-                        <i class="fas fa-clock"></i>
-                        <strong>24 hours</strong>
-                        <small>before</small>
-                    </span>
+                    <span class="interval-box"><i class="fas fa-clock"></i><strong>24 hours</strong><small>before</small></span>
                 </label>
                 <label class="interval-opt">
                     <input type="checkbox" name="interval" value="6" checked>
-                    <span class="interval-box">
-                        <i class="fas fa-clock"></i>
-                        <strong>6 hours</strong>
-                        <small>before</small>
-                    </span>
+                    <span class="interval-box"><i class="fas fa-clock"></i><strong>6 hours</strong><small>before</small></span>
                 </label>
                 <label class="interval-opt">
                     <input type="checkbox" name="interval" value="2" checked>
-                    <span class="interval-box">
-                        <i class="fas fa-clock"></i>
-                        <strong>2 hours</strong>
-                        <small>before</small>
-                    </span>
+                    <span class="interval-box"><i class="fas fa-clock"></i><strong>2 hours</strong><small>before</small></span>
                 </label>
             </div>
-
             <p class="form-error hidden" id="form-error"></p>
-
             <div class="modal-actions">
                 <button class="btn-modal-cancel" id="btn-modal-cancel">Cancel</button>
                 <button class="btn-modal-submit" id="btn-modal-submit">
@@ -201,7 +205,7 @@
             </div>
         </div>
 
-        <!-- ── Panel B: Success ───────────────────────────────────────────── -->
+        <!-- Panel B: Success -->
         <div id="panel-success" class="hidden">
             <div class="success-state">
                 <div class="success-circle"><i class="fas fa-check"></i></div>
@@ -214,7 +218,7 @@
             </div>
         </div>
 
-        <!-- ── Panel C: Manage existing reminder ──────────────────────────── -->
+        <!-- Panel C: Manage existing reminder -->
         <div id="panel-manage" class="hidden">
             <div class="manage-state">
                 <div class="manage-icon"><i class="fas fa-bell"></i></div>

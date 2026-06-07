@@ -1,124 +1,257 @@
 #!/usr/bin/env python3
-"""
-Meetup Finder — server with reminder scheduling
-Reminder scheduler runs in a background thread and fires email/SMS
-at 24 h, 6 h, and 2 h before each event.
-"""
+"""Meetup Finder — dynamic zip-based search with reminder scheduling."""
 
-import json, os, re, math, mimetypes, base64
+import json, os, re, math, mimetypes, base64, calendar
 import urllib.request, urllib.error, urllib.parse
 import smtplib, uuid, threading, time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text      import MIMEText
 from http.server           import HTTPServer, BaseHTTPRequestHandler
 from pathlib               import Path
-from datetime              import datetime, timezone, timedelta
+from datetime              import datetime, timezone, timedelta, date
 
 PORT           = int(os.environ.get('PORT', 3000))
 PUBLIC_DIR     = Path(__file__).parent / 'public'
 REMINDERS_FILE = Path(__file__).parent / 'reminders.json'
 MEETUP_GQL     = 'https://api.meetup.com/gql'
-_lock          = threading.Lock()          # guards reminders.json
+_lock          = threading.Lock()
 
-# ── Sample meetups (eventDatetime used by the scheduler) ─────────────────────
-SAMPLE_MEETUPS = [
-    {
-        'id': 1, 'topic': 'tennis',
-        'name': 'Issaquah Tennis Club — Weekly Pickup',
-        'schedule': 'Every Saturday', 'time': '9:00 AM – 11:00 AM',
-        'nextDate': 'Sat, Jun 13, 2026', 'eventDatetime': '2026-06-13T09:00:00-07:00',
-        'venue': 'Issaquah Community Center Courts',
-        'address': '301 EW Pickering Farm Rd, Issaquah, WA 98027',
-        'distanceMi': 0.4, 'members': 24, 'attending': 12,
-        'lat': 47.5346, 'lng': -122.0490,
-        'description': 'Open to all skill levels. Rotating doubles keeps everyone active. Balls provided — just bring your racket.',
-        'meetupUrl': 'https://www.meetup.com/find/?keywords=tennis&location=Issaquah%2C+WA&source=EVENTS&distance=fiveMiles'
-    },
-    {
-        'id': 2, 'topic': 'tennis',
-        'name': 'Eastside Casual Tennis',
-        'schedule': 'Every Thursday', 'time': '6:00 PM – 8:00 PM',
-        'nextDate': 'Thu, Jun 11, 2026', 'eventDatetime': '2026-06-11T18:00:00-07:00',
-        'venue': 'Tibbetts Valley Park Tennis Courts',
-        'address': '1979 12th Ave NW, Issaquah, WA 98027',
-        'distanceMi': 0.9, 'members': 38, 'attending': 8,
-        'lat': 47.5438, 'lng': -122.0279,
-        'description': 'Relaxed evening sessions for intermediate players. Four courts reserved. Friendly, welcoming atmosphere.',
-        'meetupUrl': 'https://www.meetup.com/find/?keywords=tennis&location=Issaquah%2C+WA&source=EVENTS&distance=fiveMiles'
-    },
-    {
-        'id': 3, 'topic': 'tennis',
-        'name': 'Morning Rally Tennis',
-        'schedule': 'Tuesdays & Fridays', 'time': '7:00 AM – 9:00 AM',
-        'nextDate': 'Fri, Jun 12, 2026', 'eventDatetime': '2026-06-12T07:00:00-07:00',
-        'venue': 'Gilman Playground Courts',
-        'address': '500 2nd Ave SE, Issaquah, WA 98027',
-        'distanceMi': 0.6, 'members': 29, 'attending': 6,
-        'lat': 47.5345, 'lng': -122.0468,
-        'description': 'Pre-work tennis for early risers. Consistent group, great way to start the day. Intermediate to advanced.',
-        'meetupUrl': 'https://www.meetup.com/find/?keywords=tennis&location=Issaquah%2C+WA&source=EVENTS&distance=fiveMiles'
-    },
-    {
-        'id': 4, 'topic': 'tennis',
-        'name': 'Pine Lake Tennis Group',
-        'schedule': 'Every Sunday', 'time': '10:00 AM – 12:00 PM',
-        'nextDate': 'Sun, Jun 14, 2026', 'eventDatetime': '2026-06-14T10:00:00-07:00',
-        'venue': 'Pine Lake Park Tennis Courts',
-        'address': '228th Ave SE & SE 24th St, Sammamish, WA',
-        'distanceMi': 4.5, 'members': 45, 'attending': 10,
-        'lat': 47.5934, 'lng': -122.0439,
-        'description': 'Scenic park courts with Cascade mountain views. Open rallies and organised match play. Intermediate+ preferred.',
-        'meetupUrl': 'https://www.meetup.com/find/?keywords=tennis&location=Issaquah%2C+WA&source=EVENTS&distance=fiveMiles'
-    },
-    {
-        'id': 5, 'topic': 'science',
-        'name': 'Eastside Science & Technology Enthusiasts',
-        'schedule': '2nd Tuesday of month', 'time': '7:00 PM – 9:00 PM',
-        'nextDate': 'Tue, Jun 9, 2026', 'eventDatetime': '2026-06-09T19:00:00-07:00',
-        'venue': 'Issaquah Library — Meeting Room',
-        'address': '10 W Sunset Way, Issaquah, WA 98027',
-        'distanceMi': 0.2, 'members': 156, 'attending': 25,
-        'lat': 47.5308, 'lng': -122.0315,
-        'description': 'Monthly talks and demos covering physics, biology, AI, and emerging tech. Speakers from UW, local startups, and national labs.',
-        'meetupUrl': 'https://www.meetup.com/find/?keywords=science&location=Issaquah%2C+WA&source=EVENTS&distance=fiveMiles'
-    },
-    {
-        'id': 6, 'topic': 'science',
-        'name': 'BioTech & Life Sciences Networking',
-        'schedule': '2nd Thursday of month', 'time': '6:00 PM – 8:00 PM',
-        'nextDate': 'Thu, Jun 11, 2026', 'eventDatetime': '2026-06-11T18:00:00-07:00',
-        'venue': 'Issaquah Community Center',
-        'address': '301 EW Pickering Farm Rd, Issaquah, WA 98027',
-        'distanceMi': 0.4, 'members': 112, 'attending': 30,
-        'lat': 47.5350, 'lng': -122.0495,
-        'description': 'Networking and knowledge-sharing for biotech professionals, students, and curious minds. Guest talks and open Q&A.',
-        'meetupUrl': 'https://www.meetup.com/find/?keywords=science&location=Issaquah%2C+WA&source=EVENTS&distance=fiveMiles'
-    },
-    {
-        'id': 7, 'topic': 'science',
-        'name': 'Cascades Science Discovery',
-        'schedule': 'Every Wednesday', 'time': '6:30 PM – 8:30 PM',
-        'nextDate': 'Wed, Jun 10, 2026', 'eventDatetime': '2026-06-10T18:30:00-07:00',
-        'venue': 'Lake Sammamish State Park Pavilion',
-        'address': '2000 NW Sammamish Rd, Issaquah, WA 98027',
-        'distanceMi': 4.2, 'members': 67, 'attending': 15,
-        'lat': 47.5679, 'lng': -122.0690,
-        'description': 'Nature-based science exploration: Cascades ecology, geology, and wildlife. Occasional guided outdoor walks included.',
-        'meetupUrl': 'https://www.meetup.com/find/?keywords=science&location=Issaquah%2C+WA&source=EVENTS&distance=fiveMiles'
-    },
-    {
-        'id': 8, 'topic': 'science',
-        'name': 'Pacific Northwest Astronomy Club',
-        'schedule': 'Last Friday of month', 'time': '8:00 PM – 11:00 PM',
-        'nextDate': 'Fri, Jun 26, 2026', 'eventDatetime': '2026-06-26T20:00:00-07:00',
-        'venue': 'Cougar Mountain Regional Wildland Park',
-        'address': 'Cougar Mountain Park, Bellevue, WA 98006',
-        'distanceMi': 3.8, 'members': 89, 'attending': 20,
-        'lat': 47.5167, 'lng': -122.0901,
-        'description': 'Stargazing with club telescopes at a dark-sky site. Minimal light pollution. Beginners and experienced astronomers welcome.',
-        'meetupUrl': 'https://www.meetup.com/find/?keywords=science&location=Issaquah%2C+WA&source=EVENTS&distance=fiveMiles'
-    }
-]
+# ── Topic catalogue ───────────────────────────────────────────────────────────
+TOPICS = {
+    'tennis':      {'label': 'Tennis',      'icon': 'fa-table-tennis-paddle-ball', 'color': '#16a34a'},
+    'science':     {'label': 'Science',     'icon': 'fa-flask',                    'color': '#2563eb'},
+    'hiking':      {'label': 'Hiking',      'icon': 'fa-person-hiking',            'color': '#ea580c'},
+    'technology':  {'label': 'Technology',  'icon': 'fa-laptop-code',              'color': '#7c3aed'},
+    'photography': {'label': 'Photography', 'icon': 'fa-camera',                   'color': '#db2777'},
+    'fitness':     {'label': 'Fitness',     'icon': 'fa-dumbbell',                 'color': '#dc2626'},
+    'books':       {'label': 'Books',       'icon': 'fa-book-open',                'color': '#0d9488'},
+    'music':       {'label': 'Music',       'icon': 'fa-music',                    'color': '#4f46e5'},
+    'food':        {'label': 'Food',        'icon': 'fa-utensils',                 'color': '#b45309'},
+    'outdoors':    {'label': 'Outdoors',    'icon': 'fa-tree',                     'color': '#15803d'},
+}
+
+# weekday: 0=Mon … 6=Sun   scheduleType: weekly | biweekly | monthly | monthly_last
+TOPIC_EVENTS = {
+    'tennis': [
+        {'name': '{city} Tennis Club — Weekly Pickup', 'scheduleType': 'weekly',       'weekday': 5, 'hour': 9,  'duration': 2, 'venue': '{city} Community Center Courts',    'desc': 'Open to all skill levels. Rotating doubles. Balls provided.'},
+        {'name': 'Evening Tennis Social',              'scheduleType': 'weekly',       'weekday': 3, 'hour': 18, 'duration': 2, 'venue': '{city} Park Tennis Courts',          'desc': 'Relaxed evening sessions. Friendly atmosphere for all levels.'},
+        {'name': '{city} Tennis Mixer',                'scheduleType': 'monthly',      'weekday': 6, 'nth': 2,   'hour': 10, 'duration': 2, 'venue': 'Sports Complex',        'desc': 'Monthly social mixer with ladder play. All levels welcome.'},
+        {'name': 'Morning Rally Tennis',               'scheduleType': 'weekly',       'weekday': 1, 'hour': 7,  'duration': 2, 'venue': 'Recreation Center Courts',          'desc': 'Pre-work tennis for early risers. Intermediate to advanced.'},
+    ],
+    'science': [
+        {'name': '{city} Science & Tech Enthusiasts',  'scheduleType': 'monthly',      'weekday': 1, 'nth': 2,   'hour': 19, 'duration': 2, 'venue': '{city} Public Library — Meeting Room', 'desc': 'Monthly talks on physics, biology, AI, and emerging tech.'},
+        {'name': 'BioTech & Life Sciences Networking', 'scheduleType': 'monthly',      'weekday': 3, 'nth': 2,   'hour': 18, 'duration': 2, 'venue': '{city} Community Center',              'desc': 'Networking for biotech professionals, students, and curious minds.'},
+        {'name': 'Astronomy & Stargazing Night',       'scheduleType': 'monthly_last', 'weekday': 4,             'hour': 20, 'duration': 3, 'venue': 'Regional Park (dark-sky site)',         'desc': 'Stargazing with club telescopes. Beginners always welcome.'},
+        {'name': 'Nature & Ecology Walks',             'scheduleType': 'weekly',       'weekday': 2, 'hour': 18, 'duration': 2, 'venue': 'State Park Pavilion',                             'desc': 'Explore local ecology, geology, and wildlife with a naturalist guide.'},
+    ],
+    'hiking': [
+        {'name': '{city} Trail Blazers',    'scheduleType': 'weekly',  'weekday': 6, 'hour': 8,  'duration': 4, 'venue': 'Trailhead Parking Lot',      'desc': 'Weekend morning hikes. Easy to moderate difficulty. Dogs welcome.'},
+        {'name': 'Weeknight Nature Walk',   'scheduleType': 'weekly',  'weekday': 2, 'hour': 17, 'duration': 2, 'venue': '{city} City Park Entrance',  'desc': 'Short evening walks in local parks. Great for all fitness levels.'},
+        {'name': '{city} Summit Seekers',   'scheduleType': 'monthly', 'weekday': 5, 'nth': 1,   'hour': 7, 'duration': 6, 'venue': 'Carpooling Meeting Point', 'desc': 'Monthly challenging hike with significant elevation gain. Intermediate+.'},
+    ],
+    'technology': [
+        {'name': '{city} Developers Meetup',       'scheduleType': 'monthly',   'weekday': 2, 'nth': 3,  'hour': 18, 'duration': 2, 'venue': 'Co-working Space',        'desc': 'Talks, demos, and networking for software developers. All stacks welcome.'},
+        {'name': 'AI & Machine Learning Group',    'scheduleType': 'biweekly',  'weekday': 1, 'hour': 19, 'duration': 2, 'venue': '{city} Public Library',           'desc': 'Collaborative learning on ML concepts, papers, and hands-on projects.'},
+        {'name': 'Startup Founders Coffee',        'scheduleType': 'monthly',   'weekday': 5, 'nth': 1,  'hour': 9,  'duration': 2, 'venue': 'Local Coffee Shop',       'desc': 'Informal networking for startup founders and entrepreneurs. No pitch decks.'},
+        {'name': '{city} Cyber & Security Talks',  'scheduleType': 'monthly',   'weekday': 3, 'nth': 3,  'hour': 18, 'duration': 2, 'venue': 'Tech Hub Conference Room', 'desc': 'Talks on cybersecurity, privacy, and digital safety for all experience levels.'},
+    ],
+    'photography': [
+        {'name': '{city} Photography Walk',      'scheduleType': 'weekly',  'weekday': 6, 'hour': 7,  'duration': 3, 'venue': 'Downtown Meeting Point', 'desc': 'Morning photo walks exploring local scenes. All cameras welcome.'},
+        {'name': 'Photography Critique Night',   'scheduleType': 'monthly', 'weekday': 2, 'nth': 2,   'hour': 19, 'duration': 2, 'venue': '{city} Community Center',  'desc': 'Share your recent shots for friendly critique and feedback.'},
+        {'name': 'Golden Hour Shoot',            'scheduleType': 'monthly', 'weekday': 4, 'nth': 3,   'hour': 18, 'duration': 2, 'venue': '{city} Lake Park',          'desc': 'Evening session capturing golden hour and sunset light together.'},
+    ],
+    'fitness': [
+        {'name': '{city} Outdoor Boot Camp', 'scheduleType': 'weekly', 'weekday': 5, 'hour': 7,  'duration': 1, 'venue': '{city} City Park',   'desc': 'High-energy outdoor workout. All fitness levels welcome. Bring water.'},
+        {'name': 'Morning Yoga in the Park', 'scheduleType': 'weekly', 'weekday': 6, 'hour': 8,  'duration': 1, 'venue': 'Park Lawn',           'desc': 'Relaxing outdoor yoga session. Bring your own mat. Free.'},
+        {'name': 'Running Club — 5K Fun Run','scheduleType': 'weekly', 'weekday': 0, 'hour': 7,  'duration': 1, 'venue': 'Community Track',     'desc': 'Friendly group runs at all paces. Walkers always welcome.'},
+    ],
+    'books': [
+        {'name': '{city} Book Club',             'scheduleType': 'monthly', 'weekday': 6, 'nth': 2,   'hour': 14, 'duration': 2, 'venue': '{city} Public Library', 'desc': 'Monthly fiction and non-fiction reads. New members welcome.'},
+        {'name': 'Science Fiction Reading Group','scheduleType': 'monthly', 'weekday': 4, 'nth': 3,   'hour': 19, 'duration': 2, 'venue': 'Local Bookstore',         'desc': 'Deep dives into classic and contemporary sci-fi. Lively discussions.'},
+        {'name': 'Writers Workshop',             'scheduleType': 'biweekly','weekday': 2, 'hour': 18, 'duration': 2, 'venue': 'Coffee Shop',             'desc': 'Supportive workshop for writers of all genres. Share excerpts and get feedback.'},
+    ],
+    'music': [
+        {'name': '{city} Open Mic Night',     'scheduleType': 'weekly',   'weekday': 4, 'hour': 19, 'duration': 3, 'venue': 'Local Venue Stage',   'desc': 'All musicians welcome. 10-minute slots. Sign up at the door.'},
+        {'name': 'Acoustic Jam Session',      'scheduleType': 'biweekly', 'weekday': 5, 'hour': 18, 'duration': 3, 'venue': 'Music Studio',         'desc': 'Casual acoustic jam. All skill levels, all styles. Bring your instrument.'},
+        {'name': 'Music Theory Study Group',  'scheduleType': 'monthly',  'weekday': 2, 'nth': 1,   'hour': 19, 'duration': 2, 'venue': 'Community Center', 'desc': 'Learning music theory together. Beginners to intermediate welcome.'},
+    ],
+    'food': [
+        {'name': '{city} Foodies & Cooks',       'scheduleType': 'monthly',  'weekday': 6, 'nth': 2,  'hour': 12, 'duration': 3, 'venue': 'Community Kitchen',       'desc': 'Cook and share dishes from different cuisines. Bring a dish to share.'},
+        {'name': 'Farmers Market Social',        'scheduleType': 'weekly',   'weekday': 5, 'hour': 9,  'duration': 2, 'venue': '{city} Farmers Market',      'desc': "Explore local produce and artisan foods together. Every Saturday morning."},
+        {'name': 'Restaurant Explorers',         'scheduleType': 'monthly',  'weekday': 4, 'nth': 3,  'hour': 19, 'duration': 2, 'venue': 'Rotating Local Restaurants', 'desc': 'Monthly group dinner at a different local restaurant. All cuisines.'},
+    ],
+    'outdoors': [
+        {'name': '{city} Paddling Club',        'scheduleType': 'weekly',   'weekday': 6, 'hour': 9,  'duration': 3, 'venue': 'Boat Launch / Waterfront', 'desc': 'Kayak and canoe meetups on local lakes and rivers. Beginners welcome.'},
+        {'name': 'Bird Watching Walk',          'scheduleType': 'biweekly', 'weekday': 6, 'hour': 7,  'duration': 3, 'venue': 'Nature Reserve Entrance',  'desc': 'Guided bird-watching walk for all experience levels. Binoculars recommended.'},
+        {'name': '{city} Cycling Group',        'scheduleType': 'weekly',   'weekday': 0, 'hour': 8,  'duration': 3, 'venue': 'Trailhead Parking Lot',     'desc': 'Sunday morning group rides on paved and gravel paths. Multiple pace groups.'},
+        {'name': 'Backpacking Planning Night',  'scheduleType': 'monthly',  'weekday': 1, 'nth': 2,   'hour': 19, 'duration': 2, 'venue': 'Outdoor Gear Shop',      'desc': 'Plan upcoming backpacking trips and share gear knowledge.'},
+    ],
+}
+
+# ── Date helpers ──────────────────────────────────────────────────────────────
+def _next_weekday(wd):
+    """Next occurrence of weekday wd (0=Mon,6=Sun) from today, inclusive."""
+    today = date.today()
+    delta = (wd - today.weekday()) % 7
+    return today + timedelta(days=delta if delta else 7)
+
+def _nth_weekday_of_month(n, wd, ref=None):
+    """n-th occurrence (1-based) of weekday wd in ref's month; steps forward if past."""
+    ref = ref or date.today()
+    first = ref.replace(day=1)
+    offset = (wd - first.weekday()) % 7
+    d = first + timedelta(days=offset + 7*(n-1))
+    if d < date.today():
+        nxt = (ref.replace(day=1) + timedelta(days=32)).replace(day=1)
+        return _nth_weekday_of_month(n, wd, nxt)
+    return d
+
+def _last_weekday_of_month(wd, ref=None):
+    """Last occurrence of weekday wd in ref's month; steps forward if past."""
+    ref = ref or date.today()
+    last_day = calendar.monthrange(ref.year, ref.month)[1]
+    last = ref.replace(day=last_day)
+    offset = (last.weekday() - wd) % 7
+    d = last - timedelta(days=offset)
+    if d < date.today():
+        nxt = (ref.replace(day=1) + timedelta(days=32)).replace(day=1)
+        return _last_weekday_of_month(wd, nxt)
+    return d
+
+def _event_date(tmpl):
+    stype = tmpl.get('scheduleType', 'weekly')
+    wd    = tmpl['weekday']
+    if stype == 'weekly' or stype == 'biweekly':
+        return _next_weekday(wd)
+    if stype == 'monthly':
+        return _nth_weekday_of_month(tmpl.get('nth', 1), wd)
+    if stype == 'monthly_last':
+        return _last_weekday_of_month(wd)
+    return _next_weekday(wd)
+
+def _schedule_label(tmpl):
+    days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+    wd   = tmpl['weekday']
+    stype = tmpl.get('scheduleType','weekly')
+    nth_names = ['','1st','2nd','3rd','4th']
+    if stype == 'weekly':       return f'Every {days[wd]}'
+    if stype == 'biweekly':     return f'Every other {days[wd]}'
+    if stype == 'monthly':      return f'{nth_names[tmpl.get("nth",1)]} {days[wd]} of month'
+    if stype == 'monthly_last': return f'Last {days[wd]} of month'
+    return f'Every {days[wd]}'
+
+def _fmt_time(hour, duration):
+    def _h(h):
+        ampm = 'AM' if h < 12 else 'PM'
+        h12  = h % 12 or 12
+        return f'{h12}:00 {ampm}'
+    return f'{_h(hour)} – {_h(hour + duration)}'
+
+# ── Deterministic seeded RNG ──────────────────────────────────────────────────
+def _make_rand(seed_str):
+    state = [sum(ord(c) * (i+1) for i, c in enumerate(str(seed_str))) & 0xFFFFFFFF]
+    def rand():
+        state[0] = (state[0] * 1664525 + 1013904223) & 0xFFFFFFFF
+        return state[0] / 0xFFFFFFFF
+    return rand
+
+def _rand_point(lat, lng, radius_mi, rand):
+    r     = radius_mi * rand() ** 0.5
+    theta = rand() * 2 * math.pi
+    dlat  = (r / 69.0) * math.cos(theta)
+    dlng  = (r / (69.0 * math.cos(math.radians(lat)))) * math.sin(theta)
+    return round(lat + dlat, 4), round(lng + dlng, 4)
+
+# ── Geocoding ─────────────────────────────────────────────────────────────────
+def geocode_zip(zip_code):
+    url = f'https://api.zippopotam.us/us/{zip_code}'
+    req = urllib.request.Request(url, headers={'User-Agent': 'MeetupFinder/1.0'})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        if data.get('post code') != zip_code:
+            return None
+        p = data['places'][0]
+        return {
+            'lat':   float(p['latitude']),
+            'lng':   float(p['longitude']),
+            'city':  p['place name'],
+            'state': p['state abbreviation'],
+            'zip':   zip_code,
+        }
+    except Exception as exc:
+        print(f'  [Geocode] zip={zip_code}: {exc}')
+        return None
+
+def reverse_geocode(lat, lng):
+    url = f'https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lng}&format=json'
+    req = urllib.request.Request(url, headers={'User-Agent': 'MeetupFinder/1.0'})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        addr = data.get('address', {})
+        city = addr.get('city') or addr.get('town') or addr.get('village') or addr.get('county', 'Local')
+        return {
+            'lat':   lat,
+            'lng':   lng,
+            'city':  city,
+            'state': addr.get('state', ''),
+            'zip':   addr.get('postcode', ''),
+        }
+    except Exception as exc:
+        print(f'  [RevGeocode] {exc}')
+        return {'lat': lat, 'lng': lng, 'city': 'Local', 'state': '', 'zip': ''}
+
+# ── Sample meetup generation ──────────────────────────────────────────────────
+def generate_sample_meetups(loc, radius_mi, topics):
+    rand   = _make_rand(loc.get('zip') or f'{loc["lat"]:.2f}{loc["lng"]:.2f}')
+    city   = loc.get('city', 'Local')
+    state  = loc.get('state', '')
+    tz_off = '-07:00'
+    results, eid = [], 1
+
+    for topic in topics:
+        if topic not in TOPIC_EVENTS:
+            continue
+        color = TOPICS.get(topic, {}).get('color', '#64748b')
+        for tmpl in TOPIC_EVENTS[topic]:
+            plat, plng = _rand_point(loc['lat'], loc['lng'], radius_mi, rand)
+            dist = round(_haversine(loc['lat'], loc['lng'], plat, plng), 1)
+            if dist > radius_mi:
+                continue
+
+            d     = _event_date(tmpl)
+            hour  = tmpl['hour']
+            dt_s  = f"{d.isoformat()}T{hour:02d}:00:00{tz_off}"
+            members   = max(10, int(rand() * 180) + 15)
+            attending = max(3,  int(rand() * min(members, 35)) + 3)
+
+            results.append({
+                'id':            eid,
+                'topic':         topic,
+                'color':         color,
+                'name':          tmpl['name'].replace('{city}', city),
+                'schedule':      _schedule_label(tmpl),
+                'time':          _fmt_time(hour, tmpl.get('duration', 2)),
+                'nextDate':      d.strftime('%a, %b %-d, %Y'),
+                'eventDatetime': dt_s,
+                'venue':         tmpl['venue'].replace('{city}', city),
+                'address':       f'{city}, {state}',
+                'distanceMi':    dist,
+                'members':       members,
+                'attending':     attending,
+                'lat':           plat,
+                'lng':           plng,
+                'description':   tmpl['desc'],
+                'meetupUrl':     (
+                    f'https://www.meetup.com/find/?keywords={urllib.parse.quote(topic)}'
+                    f'&location={urllib.parse.quote(city)}%2C+{urllib.parse.quote(state)}'
+                    f'&source=EVENTS&distance={"fiveMiles" if radius_mi <= 5 else "tenMiles"}'
+                ),
+            })
+            eid += 1
+
+    return results
 
 # ── Reminder storage ──────────────────────────────────────────────────────────
 def load_reminders():
@@ -136,23 +269,22 @@ def save_reminders(reminders):
 
 # ── Email ─────────────────────────────────────────────────────────────────────
 def _email_html(r, hours_before):
-    accent = '#16a34a' if r.get('topic') == 'tennis' else '#2563eb'
-    icon   = '🎾' if r.get('topic') == 'tennis' else '🔬'
+    color  = TOPICS.get(r.get('topic',''), {}).get('color', '#3b82f6')
     plural = 's' if hours_before != 1 else ''
     return f"""<!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',system-ui,sans-serif">
   <div style="max-width:560px;margin:28px auto;border-radius:14px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.1)">
     <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);color:#fff;padding:26px 28px">
-      <div style="font-size:1.05rem;opacity:.7;margin-bottom:4px">Meetup Finder — Issaquah, WA</div>
+      <div style="font-size:1.05rem;opacity:.7;margin-bottom:4px">Meetup Finder</div>
       <div style="font-size:1.5rem;font-weight:800">🔔 Event Reminder</div>
     </div>
     <div style="background:#fff;padding:28px">
       <div style="background:#fef9c3;color:#854d0e;border:1px solid #fde68a;border-radius:8px;padding:10px 16px;margin-bottom:20px;font-weight:700;font-size:.95rem">
         ⏰ Starting in {hours_before} hour{plural}
       </div>
-      <div style="font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:{accent};margin-bottom:6px">
-        {icon} {r.get('topic','').capitalize()}
+      <div style="font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:{color};margin-bottom:6px">
+        {r.get('topic','').capitalize()}
       </div>
       <h2 style="margin:0 0 14px;font-size:1.2rem;color:#1e293b">{r['eventName']}</h2>
       <div style="background:#f8fafc;border-radius:10px;padding:16px;margin-bottom:20px">
@@ -161,7 +293,7 @@ def _email_html(r, hours_before):
       </div>
       <div style="color:#94a3b8;font-size:.78rem;border-top:1px solid #f1f5f9;padding-top:16px">
         You set this reminder via Meetup Finder.
-        To cancel remaining reminders open the app and click the bell icon on this event.
+        To cancel, open the app and click the bell icon on this event.
       </div>
     </div>
   </div>
@@ -169,28 +301,23 @@ def _email_html(r, hours_before):
 </html>"""
 
 def send_email(to_addr, subject, html_body, plain_body):
-    host    = os.environ.get('SMTP_HOST', 'smtp.gmail.com')
-    port    = int(os.environ.get('SMTP_PORT', 587))
-    user    = os.environ.get('SMTP_USER', '').strip()
-    passwd  = os.environ.get('SMTP_PASS', '').strip()
-    sender  = os.environ.get('SMTP_FROM', user)
-
+    host   = os.environ.get('SMTP_HOST', 'smtp.gmail.com')
+    port   = int(os.environ.get('SMTP_PORT', 587))
+    user   = os.environ.get('SMTP_USER', '').strip()
+    passwd = os.environ.get('SMTP_PASS', '').strip()
+    sender = os.environ.get('SMTP_FROM', user)
     if not user or not passwd:
         print(f'  [Email] SMTP not configured — skipping {to_addr}')
         return False
-
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
     msg['From']    = f'Meetup Finder <{sender}>'
     msg['To']      = to_addr
     msg.attach(MIMEText(plain_body, 'plain'))
     msg.attach(MIMEText(html_body,  'html'))
-
     try:
         with smtplib.SMTP(host, port, timeout=15) as smtp:
-            smtp.ehlo()
-            smtp.starttls()
-            smtp.login(user, passwd)
+            smtp.ehlo(); smtp.starttls(); smtp.login(user, passwd)
             smtp.send_message(msg)
         print(f'  [Email] Sent "{subject}" → {to_addr}')
         return True
@@ -198,26 +325,20 @@ def send_email(to_addr, subject, html_body, plain_body):
         print(f'  [Email] Error → {to_addr}: {exc}')
         return False
 
-# ── SMS via Twilio REST API (no external package needed) ──────────────────────
+# ── SMS via Twilio ────────────────────────────────────────────────────────────
 def send_sms(to_number, body):
-    sid        = os.environ.get('TWILIO_ACCOUNT_SID', '').strip()
-    token      = os.environ.get('TWILIO_AUTH_TOKEN', '').strip()
-    from_num   = os.environ.get('TWILIO_FROM_NUMBER', '').strip()
-
+    sid      = os.environ.get('TWILIO_ACCOUNT_SID', '').strip()
+    token    = os.environ.get('TWILIO_AUTH_TOKEN', '').strip()
+    from_num = os.environ.get('TWILIO_FROM_NUMBER', '').strip()
     if not (sid and token and from_num):
         print(f'  [SMS] Twilio not configured — skipping {to_number}')
         return False
-
     url  = f'https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json'
     cred = base64.b64encode(f'{sid}:{token}'.encode()).decode()
     data = urllib.parse.urlencode({'From': from_num, 'To': to_number, 'Body': body}).encode()
-
-    req = urllib.request.Request(
-        url, data=data,
-        headers={'Authorization': f'Basic {cred}',
-                 'Content-Type': 'application/x-www-form-urlencoded'},
-        method='POST'
-    )
+    req  = urllib.request.Request(url, data=data,
+           headers={'Authorization': f'Basic {cred}',
+                    'Content-Type': 'application/x-www-form-urlencoded'}, method='POST')
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             result = json.loads(resp.read())
@@ -229,66 +350,43 @@ def send_sms(to_number, body):
 
 # ── Reminder scheduler ────────────────────────────────────────────────────────
 def _parse_dt(iso_str):
-    """Parse ISO-8601 with UTC offset (e.g. 2026-06-13T09:00:00-07:00)."""
     return datetime.fromisoformat(iso_str)
 
 def _fire_reminder(r, hours_before):
     plural  = 's' if hours_before != 1 else ''
     subject = f'Reminder: "{r["eventName"]}" starts in {hours_before} hour{plural}'
-    plain   = (f'This is your {hours_before}h reminder for:\n\n'
-               f'{r["eventName"]}\n'
-               f'{r["eventNextDate"]} · {r["eventTime"]}\n'
-               f'{r["eventVenue"]}\n\n'
-               f'See you there!')
-    sms_body = (f'Reminder: {r["eventName"]} starts in {hours_before}h. '
-                f'{r["eventVenue"]}. {r["eventNextDate"]} {r["eventTime"]}')[:160]
-
-    if r.get('email'):
-        send_email(r['email'], subject, _email_html(r, hours_before), plain)
-    if r.get('phone'):
-        send_sms(r['phone'], sms_body)
+    plain   = (f'{r["eventName"]}\n{r["eventNextDate"]} · {r["eventTime"]}\n{r["eventVenue"]}')
+    sms     = f'Reminder: {r["eventName"]} starts in {hours_before}h. {r["eventVenue"]}.'[:160]
+    if r.get('email'): send_email(r['email'], subject, _email_html(r, hours_before), plain)
+    if r.get('phone'): send_sms(r['phone'], sms)
 
 def _check_reminders():
     reminders = load_reminders()
-    now       = datetime.now(timezone.utc)
-    changed   = False
-
+    now, changed = datetime.now(timezone.utc), False
     for r in reminders:
-        if r.get('cancelled'):
-            continue
+        if r.get('cancelled'): continue
         try:
             event_dt = _parse_dt(r['eventDatetime']).astimezone(timezone.utc)
         except (KeyError, ValueError):
             continue
-
-        if event_dt < now:
-            continue
-
+        if event_dt < now: continue
         sent = set(r.get('sentIntervals', []))
         for hours in r.get('intervals', []):
-            if hours in sent:
-                continue
-            fire_at = event_dt - timedelta(hours=hours)
-            if now >= fire_at:
+            if hours in sent: continue
+            if now >= event_dt - timedelta(hours=hours):
                 print(f'  [Scheduler] Firing {hours}h reminder for "{r["eventName"]}"')
                 _fire_reminder(r, hours)
-                sent.add(hours)
-                r['sentIntervals'] = list(sent)
-                changed = True
-
-    if changed:
-        save_reminders(reminders)
+                sent.add(hours); r['sentIntervals'] = list(sent); changed = True
+    if changed: save_reminders(reminders)
 
 def _scheduler_loop():
     print('  [Scheduler] Started — checking every 60 s')
     while True:
-        try:
-            _check_reminders()
-        except Exception as exc:
-            print(f'  [Scheduler] Unexpected error: {exc}')
+        try: _check_reminders()
+        except Exception as exc: print(f'  [Scheduler] Error: {exc}')
         time.sleep(60)
 
-# ── Live Meetup.com GraphQL client ────────────────────────────────────────────
+# ── Live Meetup.com GraphQL ───────────────────────────────────────────────────
 GQL_QUERY = """
 query($query: String!, $lat: Float!, $lon: Float!, $radius: Float!) {
   keywordSearch(
@@ -315,17 +413,13 @@ def _haversine(lat1, lon1, lat2, lon2):
 
 def fetch_live_events(topic, lat, lng, radius_miles):
     token = os.environ.get('MEETUP_ACCESS_TOKEN', '').strip()
-    if not token:
-        return None
+    if not token: return None
     payload = json.dumps({'query': GQL_QUERY,
                           'variables': {'query': topic, 'lat': lat,
                                         'lon': lng, 'radius': radius_miles*1609.34}}).encode()
-    req = urllib.request.Request(
-        MEETUP_GQL, data=payload,
-        headers={'Content-Type': 'application/json',
-                 'Authorization': f'Bearer {token}'},
-        method='POST'
-    )
+    req = urllib.request.Request(MEETUP_GQL, data=payload,
+          headers={'Content-Type': 'application/json',
+                   'Authorization': f'Bearer {token}'}, method='POST')
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
@@ -333,16 +427,15 @@ def fetch_live_events(topic, lat, lng, radius_miles):
         results = []
         for edge in edges:
             r = (edge.get('node') or {}).get('result') or {}
-            if not r.get('id'):
-                continue
-            v = r.get('venue') or {}
-            g = r.get('group') or {}
+            if not r.get('id'): continue
+            v = r.get('venue') or {}; g = r.get('group') or {}
             vlat, vlon = v.get('lat', lat), v.get('lon', lng)
             results.append({
                 'id': r['id'], 'topic': topic,
+                'color': TOPICS.get(topic, {}).get('color', '#64748b'),
                 'name': r.get('title', ''),
                 'description': (r.get('description') or '')[:300],
-                'nextDate': r.get('dateTime', ''), 'eventDatetime': r.get('dateTime', ''),
+                'nextDate': r.get('dateTime',''), 'eventDatetime': r.get('dateTime',''),
                 'schedule': 'See event page', 'time': '',
                 'venue': v.get('name', 'TBD'),
                 'address': ', '.join(filter(None, [v.get('address'), v.get('city'), v.get('state')])),
@@ -354,8 +447,7 @@ def fetch_live_events(topic, lat, lng, radius_miles):
             })
         return results or None
     except Exception as exc:
-        print(f'  [Meetup API] {exc}')
-        return None
+        print(f'  [Meetup API] {exc}'); return None
 
 # ── HTTP handler ──────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
@@ -363,7 +455,6 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f'  {self.address_string()}  {fmt % args}')
 
-    # helpers
     def _send_json(self, obj, status=200):
         body = json.dumps(obj, default=str).encode()
         self.send_response(status)
@@ -376,8 +467,7 @@ class Handler(BaseHTTPRequestHandler):
     def _send_file(self, fpath):
         fpath = Path(fpath)
         if not fpath.is_file():
-            self._send_json({'error': 'Not found'}, 404)
-            return
+            self._send_json({'error': 'Not found'}, 404); return
         data = fpath.read_bytes()
         mime = mimetypes.guess_type(str(fpath))[0] or 'application/octet-stream'
         self.send_response(200)
@@ -389,18 +479,14 @@ class Handler(BaseHTTPRequestHandler):
     def _read_body(self):
         length = int(self.headers.get('Content-Length', 0))
         raw = self.rfile.read(length) if length else b''
-        try:
-            return json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            return None
+        try:   return json.loads(raw) if raw else {}
+        except json.JSONDecodeError: return None
 
     @staticmethod
     def _qs(raw):
-        if '?' not in raw:
-            return {}
+        if '?' not in raw: return {}
         return dict(urllib.parse.parse_qsl(raw.split('?', 1)[1]))
 
-    # ── OPTIONS (CORS preflight) ──────────────────────────────────────────────
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -408,85 +494,98 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
 
-    # ── GET ───────────────────────────────────────────────────────────────────
     def do_GET(self):
         path   = self.path.split('?')[0]
         params = self._qs(self.path)
 
+        # ── /api/topics ──────────────────────────────────────────────────────
+        if path == '/api/topics':
+            self._send_json({'topics': [
+                {'id': k, **v} for k, v in TOPICS.items()
+            ]}); return
+
+        # ── /api/geocode?zip=XXXXX ───────────────────────────────────────────
+        if path == '/api/geocode':
+            zip_code = params.get('zip', '').strip()
+            if not re.fullmatch(r'\d{5}', zip_code):
+                self._send_json({'error': 'Provide a 5-digit US zip code'}, 400); return
+            loc = geocode_zip(zip_code)
+            if not loc:
+                self._send_json({'error': f'Zip code {zip_code} not found'}, 404); return
+            self._send_json(loc); return
+
+        # ── /api/reverse-geocode?lat=X&lng=Y ────────────────────────────────
+        if path == '/api/reverse-geocode':
+            try:
+                lat = float(params['lat']); lng = float(params['lng'])
+            except (KeyError, ValueError):
+                self._send_json({'error': 'lat and lng required'}, 400); return
+            self._send_json(reverse_geocode(lat, lng)); return
+
+        # ── /api/status ──────────────────────────────────────────────────────
         if path == '/api/status':
             self._send_json({
-                'liveApi':   bool(os.environ.get('MEETUP_ACCESS_TOKEN')),
+                'liveApi':    bool(os.environ.get('MEETUP_ACCESS_TOKEN')),
                 'emailReady': bool(os.environ.get('SMTP_USER')),
-                'smsReady':  bool(os.environ.get('TWILIO_ACCOUNT_SID')),
-                'location':  'Issaquah, WA',
-                'center':    {'lat': 47.5301, 'lng': -122.0326},
-                'radiusMiles': 5,
+                'smsReady':   bool(os.environ.get('TWILIO_ACCOUNT_SID')),
                 'serverTime': datetime.now(timezone.utc).isoformat()
-            })
-            return
+            }); return
 
+        # ── /api/meetups ─────────────────────────────────────────────────────
         if path == '/api/meetups':
             topics_raw = params.get('topics', 'tennis,science')
-            lat    = float(params.get('lat',    47.5301))
-            lng    = float(params.get('lng',   -122.0326))
-            radius = float(params.get('radius', 5.0))
             topic_list = [t.strip().lower() for t in topics_raw.split(',') if t.strip()]
+            radius     = float(params.get('radius', 5.0))
+            radius     = max(1.0, min(radius, 50.0))
+
+            # Resolve location: prefer zip, fallback to lat/lng
+            zip_code = params.get('zip', '').strip()
+            if zip_code and re.fullmatch(r'\d{5}', zip_code):
+                loc = geocode_zip(zip_code)
+                if not loc:
+                    self._send_json({'error': f'Zip code {zip_code} not found'}, 404); return
+            else:
+                try:
+                    lat = float(params.get('lat', 47.5301))
+                    lng = float(params.get('lng', -122.0326))
+                except ValueError:
+                    self._send_json({'error': 'Invalid lat/lng'}, 400); return
+                loc = {'lat': lat, 'lng': lng, 'city': 'Local', 'state': '', 'zip': ''}
+
             source, results = 'sample', []
             if os.environ.get('MEETUP_ACCESS_TOKEN'):
                 for t in topic_list:
-                    live = fetch_live_events(t, lat, lng, radius)
-                    if live:
-                        results.extend(live); source = 'live'
+                    live = fetch_live_events(t, loc['lat'], loc['lng'], radius)
+                    if live: results.extend(live); source = 'live'
             if not results:
-                results = [m for m in SAMPLE_MEETUPS if m['topic'] in topic_list]
-            self._send_json({'source': source, 'meetups': results,
-                             'count': len(results),
-                             'fetchedAt': datetime.now(timezone.utc).isoformat()})
-            return
+                results = generate_sample_meetups(loc, radius, topic_list)
 
-        m = re.fullmatch(r'/api/meetups/(\d+)', path)
-        if m:
-            mid = int(m.group(1))
-            rec = next((x for x in SAMPLE_MEETUPS if x['id'] == mid), None)
-            self._send_json(rec if rec else {'error': 'Not found'}, 200 if rec else 404)
-            return
+            self._send_json({
+                'source': source, 'meetups': results, 'count': len(results),
+                'location': loc,
+                'fetchedAt': datetime.now(timezone.utc).isoformat()
+            }); return
 
-        if path == '/api/reminders':
-            reminders = [r for r in load_reminders() if not r.get('cancelled')]
-            self._send_json({'reminders': reminders, 'count': len(reminders)})
-            return
-
-        m = re.fullmatch(r'/api/reminders/([0-9a-f\-]+)', path)
-        if m:
-            rid = m.group(1)
-            rec = next((r for r in load_reminders() if r['id'] == rid), None)
-            self._send_json(rec if rec else {'error': 'Not found'}, 200 if rec else 404)
-            return
-
-        if path == '/':
-            path = '/index.html'
+        # ── static files ─────────────────────────────────────────────────────
+        if path == '/': path = '/index.html'
         fp = PUBLIC_DIR / path.lstrip('/')
         self._send_file(fp) if fp.is_file() else self._send_file(PUBLIC_DIR / 'index.html')
 
-    # ── POST ──────────────────────────────────────────────────────────────────
     def do_POST(self):
         path = self.path.split('?')[0]
         data = self._read_body()
         if data is None:
-            self._send_json({'error': 'Invalid JSON body'}, 400)
-            return
-
+            self._send_json({'error': 'Invalid JSON body'}, 400); return
         if path == '/api/reminders':
-            self._create_reminder(data)
-            return
-
+            self._create_reminder(data); return
         self._send_json({'error': 'Not found'}, 404)
 
     def _create_reminder(self, data):
-        event_id  = data.get('eventId')
-        email     = (data.get('email') or '').strip().lower()
-        phone     = (data.get('phone') or '').strip()
-        intervals = data.get('intervals', [])
+        # Accept all event fields from the body (events are now dynamic)
+        event_id   = data.get('eventId')
+        email      = (data.get('email') or '').strip().lower()
+        phone      = (data.get('phone') or '').strip()
+        intervals  = data.get('intervals', [])
 
         if not event_id:
             self._send_json({'error': 'eventId is required'}, 400); return
@@ -497,45 +596,40 @@ class Handler(BaseHTTPRequestHandler):
         if not valid_intervals:
             self._send_json({'error': 'Select at least one reminder time (2h, 6h, or 24h)'}, 400); return
 
-        meetup = next((m for m in SAMPLE_MEETUPS if m['id'] == event_id), None)
-        if not meetup:
-            self._send_json({'error': 'Event not found'}, 404); return
-
         if email and not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', email):
             self._send_json({'error': 'Invalid email address'}, 400); return
 
-        # normalise phone → E.164
         if phone:
             digits = re.sub(r'\D', '', phone)
-            if len(digits) == 10:
-                digits = '1' + digits
+            if len(digits) == 10: digits = '1' + digits
             if len(digits) != 11:
-                self._send_json({'error': 'Phone must be a 10-digit US number or E.164 format'}, 400); return
+                self._send_json({'error': 'Phone must be a 10-digit US number'}, 400); return
             phone = '+' + digits
 
-        # reject if event already passed
+        # All event metadata comes from the POST body (no server-side lookup needed)
+        event_dt_str = data.get('eventDatetime', '')
         try:
-            event_dt = _parse_dt(meetup['eventDatetime']).astimezone(timezone.utc)
+            event_dt = _parse_dt(event_dt_str).astimezone(timezone.utc)
             if event_dt < datetime.now(timezone.utc):
                 self._send_json({'error': 'This event has already passed'}, 400); return
-        except ValueError:
+        except (ValueError, TypeError):
             pass
 
         reminder = {
-            'id':             str(uuid.uuid4()),
-            'eventId':        event_id,
-            'eventName':      meetup['name'],
-            'eventDatetime':  meetup['eventDatetime'],
-            'eventNextDate':  meetup['nextDate'],
-            'eventTime':      meetup.get('time', ''),
-            'eventVenue':     meetup['venue'],
-            'topic':          meetup['topic'],
-            'email':          email or None,
-            'phone':          phone or None,
-            'intervals':      sorted(valid_intervals, reverse=True),
-            'sentIntervals':  [],
-            'cancelled':      False,
-            'createdAt':      datetime.now(timezone.utc).isoformat()
+            'id':            str(uuid.uuid4()),
+            'eventId':       event_id,
+            'eventName':     data.get('eventName', 'Event'),
+            'eventDatetime': event_dt_str,
+            'eventNextDate': data.get('eventNextDate', ''),
+            'eventTime':     data.get('eventTime', ''),
+            'eventVenue':    data.get('eventVenue', ''),
+            'topic':         data.get('topic', ''),
+            'email':         email or None,
+            'phone':         phone or None,
+            'intervals':     sorted(valid_intervals, reverse=True),
+            'sentIntervals': [],
+            'cancelled':     False,
+            'createdAt':     datetime.now(timezone.utc).isoformat()
         }
         reminders = load_reminders()
         reminders.append(reminder)
@@ -548,33 +642,28 @@ class Handler(BaseHTTPRequestHandler):
             'reminder': reminder
         }, 201)
 
-    # ── DELETE ────────────────────────────────────────────────────────────────
     def do_DELETE(self):
         path = self.path.split('?')[0]
         m = re.fullmatch(r'/api/reminders/([0-9a-f\-]+)', path)
         if not m:
             self._send_json({'error': 'Not found'}, 404); return
-
-        rid       = m.group(1)
+        rid = m.group(1)
         reminders = load_reminders()
-        rec       = next((r for r in reminders if r['id'] == rid), None)
+        rec = next((r for r in reminders if r['id'] == rid), None)
         if not rec:
             self._send_json({'error': 'Reminder not found'}, 404); return
-
         rec['cancelled'] = True
         save_reminders(reminders)
         self._send_json({'message': 'Reminder cancelled'})
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    t = threading.Thread(target=_scheduler_loop, daemon=True)
-    t.start()
-
+    threading.Thread(target=_scheduler_loop, daemon=True).start()
     httpd = HTTPServer(('0.0.0.0', PORT), Handler)
     print(f'\n  Meetup Finder  →  http://localhost:{PORT}')
-    print(f'  Meetup API  : {"Live" if os.environ.get("MEETUP_ACCESS_TOKEN") else "Sample data"}')
-    print(f'  Email       : {"Ready (" + os.environ.get("SMTP_USER","") + ")" if os.environ.get("SMTP_USER") else "Not configured (set SMTP_USER / SMTP_PASS)"}')
-    print(f'  SMS         : {"Ready" if os.environ.get("TWILIO_ACCOUNT_SID") else "Not configured (set TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER)"}')
+    print(f'  Meetup API  : {"Live" if os.environ.get("MEETUP_ACCESS_TOKEN") else "Sample data (dynamic by zip)"}')
+    print(f'  Email       : {"Ready (" + os.environ.get("SMTP_USER","") + ")" if os.environ.get("SMTP_USER") else "Not configured"}')
+    print(f'  SMS         : {"Ready" if os.environ.get("TWILIO_ACCOUNT_SID") else "Not configured"}')
     print()
     try:
         httpd.serve_forever()

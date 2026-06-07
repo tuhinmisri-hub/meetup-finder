@@ -1,45 +1,199 @@
 'use strict';
 
-const API_BASE  = '';
-const CENTER    = [47.5301, -122.0326];
-const RADIUS_MI = 5;
-const LS_KEY    = 'meetup_reminders_v1';
+const LS_KEY = 'meetup_reminders_v1';
 
 // ── App state ─────────────────────────────────────────────────────────────────
 let allMeetups   = [];
+let allTopics    = {};    // { id: {label, icon, color} }
 let activeFilter = 'all';
 let activeSort   = 'distance';
-let map, markers = [];
+let currentLoc   = null; // { lat, lng, city, state, zip }
+let map, centerMarker, radiusCircle;
+let markers = [];
 
 // ── Modal state ───────────────────────────────────────────────────────────────
-let modalMeetup = null;       // meetup object currently in modal
+let modalMeetup = null;
 
 // ══════════════════════════════════════════════════════════════════════════════
-// API
+// Boot
 // ══════════════════════════════════════════════════════════════════════════════
-async function loadMeetups() {
-    setLoadingState(true);
+async function boot() {
+    initMap();
+    await loadTopics();
+
+    // Wire up search controls
+    document.getElementById('btn-search').addEventListener('click', doSearch);
+    document.getElementById('zip-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') doSearch();
+    });
+    document.getElementById('btn-locate').addEventListener('click', useMyLocation);
+    document.getElementById('btn-refresh').addEventListener('click', doSearch);
+    document.getElementById('sort-select').addEventListener('change', e => {
+        activeSort = e.target.value; renderAll();
+    });
+
+    // Modal controls
+    document.getElementById('modal-close').addEventListener('click', closeModal);
+    document.getElementById('btn-modal-cancel').addEventListener('click', closeModal);
+    document.getElementById('btn-success-done').addEventListener('click', closeModal);
+    document.getElementById('btn-manage-close').addEventListener('click', closeModal);
+    document.getElementById('btn-cancel-reminder').addEventListener('click', cancelReminder);
+    document.getElementById('btn-modal-submit').addEventListener('click', submitReminder);
+    document.getElementById('reminder-modal').addEventListener('click', e => {
+        if (e.target === document.getElementById('reminder-modal')) closeModal();
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Topics
+// ══════════════════════════════════════════════════════════════════════════════
+async function loadTopics() {
     try {
-        const url = `${API_BASE}/api/meetups?topics=tennis,science&lat=${CENTER[0]}&lng=${CENTER[1]}&radius=${RADIUS_MI}`;
-        const res  = await fetch(url);
-        if (!res.ok) throw new Error(`Server returned ${res.status}`);
-        const json = await res.json();
-        allMeetups = json.meetups || [];
-        renderSourceBadge(json.source, json.fetchedAt);
-        renderAll();
-        setLoadingState(false);
-    } catch (err) {
-        console.error(err);
-        setErrorState(err.message);
+        const res  = await fetch('/api/topics');
+        const data = await res.json();
+        data.topics.forEach(t => { allTopics[t.id] = t; });
+        renderTopicCheckboxes();
+    } catch (e) {
+        console.error('Failed to load topics', e);
+        document.getElementById('topic-checks').innerHTML =
+            '<span style="color:rgba(255,255,255,.5);font-size:.82rem">Topics unavailable</span>';
     }
 }
 
-async function loadStatus() {
+function renderTopicCheckboxes() {
+    const wrap = document.getElementById('topic-checks');
+    wrap.innerHTML = '';
+    // Default selections
+    const defaults = new Set(['tennis', 'science', 'hiking', 'technology']);
+    Object.entries(allTopics).forEach(([id, t]) => {
+        const lbl = document.createElement('label');
+        lbl.className = 'topic-check-label';
+        lbl.innerHTML = `
+            <input type="checkbox" name="topic" value="${id}" ${defaults.has(id) ? 'checked' : ''}>
+            <span class="topic-chip" style="--tc:${t.color}">
+                <i class="fas ${t.icon}"></i> ${t.label}
+            </span>`;
+        wrap.appendChild(lbl);
+    });
+}
+
+function getSelectedTopics() {
+    return Array.from(document.querySelectorAll('input[name="topic"]:checked'))
+                .map(cb => cb.value);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Search & geocoding
+// ══════════════════════════════════════════════════════════════════════════════
+async function doSearch() {
+    const zip    = document.getElementById('zip-input').value.trim();
+    const radius = parseFloat(document.getElementById('radius-select').value);
+    const topics = getSelectedTopics();
+
+    if (!currentLoc && !zip) {
+        alert('Enter a zip code or use your location first.'); return;
+    }
+    if (!topics.length) {
+        alert('Select at least one topic.'); return;
+    }
+
+    showResultsArea(true);
+
+    // If a new zip was typed, geocode it
+    if (zip && (!currentLoc || currentLoc.zip !== zip)) {
+        if (!/^\d{5}$/.test(zip)) {
+            setErrorState('Enter a valid 5-digit zip code.'); return;
+        }
+        setSearchLoading(true, 'Looking up zip code…');
+        try {
+            const res = await fetch(`/api/geocode?zip=${zip}`);
+            const loc = await res.json();
+            if (!res.ok) { setErrorState(loc.error || 'Zip code not found.'); return; }
+            currentLoc = loc;
+        } catch (e) {
+            setErrorState('Failed to look up zip code. Check your connection.'); return;
+        }
+    }
+
+    await fetchAndRender(radius, topics);
+}
+
+async function useMyLocation() {
+    if (!navigator.geolocation) {
+        alert('Geolocation is not supported by your browser.'); return;
+    }
+    const btn = document.getElementById('btn-locate');
+    const lbl = document.getElementById('locate-label');
+    btn.disabled = true;
+    lbl.textContent = 'Detecting…';
+
+    navigator.geolocation.getCurrentPosition(
+        async pos => {
+            const { latitude: lat, longitude: lng } = pos.coords;
+            try {
+                const res = await fetch(`/api/reverse-geocode?lat=${lat}&lng=${lng}`);
+                const loc = await res.json();
+                currentLoc = { ...loc, lat, lng };
+            } catch (_) {
+                currentLoc = { lat, lng, city: 'Your location', state: '', zip: '' };
+            }
+
+            if (currentLoc.zip) {
+                document.getElementById('zip-input').value = currentLoc.zip;
+            }
+            setLocationChip(currentLoc);
+            btn.disabled = false;
+            lbl.textContent = 'Use my location';
+
+            const topics = getSelectedTopics();
+            const radius = parseFloat(document.getElementById('radius-select').value);
+            if (topics.length) {
+                showResultsArea(true);
+                await fetchAndRender(radius, topics);
+            }
+        },
+        err => {
+            btn.disabled = false;
+            lbl.textContent = 'Use my location';
+            alert('Could not get your location. Please enter a zip code manually.');
+        },
+        { timeout: 10000 }
+    );
+}
+
+async function fetchAndRender(radius, topics) {
+    if (!currentLoc) return;
+    setLoadingState(true);
+
+    const params = new URLSearchParams({
+        zip:    currentLoc.zip || '',
+        lat:    currentLoc.lat,
+        lng:    currentLoc.lng,
+        radius: radius,
+        topics: topics.join(','),
+    });
+
     try {
-        const res  = await fetch(`${API_BASE}/api/status`);
+        const res  = await fetch(`/api/meetups?${params}`);
+        if (!res.ok) { const d = await res.json(); setErrorState(d.error || `Error ${res.status}`); return; }
         const data = await res.json();
-        console.info('[status]', data);
-    } catch (_) {}
+        allMeetups  = data.meetups || [];
+        currentLoc  = data.location || currentLoc;
+        activeFilter = 'all';
+
+        renderSourceBadge(data.source, data.fetchedAt);
+        setLocationChip(currentLoc);
+        updateStatRadius(radius);
+        renderFilterTabs(topics);
+        renderBannerLinks(topics, currentLoc);
+        renderAll();
+        updateMapCenter(currentLoc, radius);
+        document.getElementById('btn-refresh').disabled = false;
+        setLoadingState(false);
+    } catch (err) {
+        setErrorState(err.message);
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -57,10 +211,10 @@ function sortedFiltered() {
         ? allMeetups
         : allMeetups.filter(m => m.topic === activeFilter);
     return [...base].sort((a, b) => {
-        if (activeSort === 'distance') return a.distanceMi - b.distanceMi;
-        if (activeSort === 'members')  return b.members - a.members;
-        if (activeSort === 'attending')return b.attending - a.attending;
-        if (activeSort === 'name')     return a.name.localeCompare(b.name);
+        if (activeSort === 'distance')  return a.distanceMi - b.distanceMi;
+        if (activeSort === 'members')   return b.members - a.members;
+        if (activeSort === 'attending') return b.attending - a.attending;
+        if (activeSort === 'name')      return a.name.localeCompare(b.name);
         return 0;
     });
 }
@@ -68,28 +222,27 @@ function sortedFiltered() {
 function renderCards(list) {
     const container = document.getElementById('cards');
     container.innerHTML = '';
-
     if (!list.length) {
         container.innerHTML = '<p style="color:#94a3b8;text-align:center;padding:2rem">No events found for this filter.</p>';
+        document.getElementById('stat-events').textContent  = 0;
+        document.getElementById('stat-members').textContent = 0;
         return;
     }
 
     list.forEach(m => {
-        const pillClass = m.topic === 'tennis' ? 'tennis-pill' : 'science-pill';
-        const linkClass = m.topic === 'tennis' ? 'tennis-link' : 'science-link';
-        const icon      = m.topic === 'tennis' ? 'fa-table-tennis-paddle-ball' : 'fa-flask';
-        const active    = !!getActiveReminder(m.id);
+        const color  = m.color || allTopics[m.topic]?.color || '#64748b';
+        const icon   = allTopics[m.topic]?.icon || 'fa-calendar';
+        const active = !!getActiveReminder(m.id);
 
         const card = document.createElement('div');
         card.className = 'meetup-card';
         card.dataset.id = m.id;
 
         const nextLabel = m.nextDate
-            ? `<span class="next-chip"><i class="fas fa-clock" style="font-size:.62rem"></i> ${m.nextDate}</span>`
-            : '';
+            ? `<span class="next-chip"><i class="fas fa-clock" style="font-size:.62rem"></i> ${m.nextDate}</span>` : '';
         const timeRow = m.time
-            ? `<div class="meta-row"><i class="fas fa-clock"></i>${m.schedule} &middot; ${m.time}</div>`
-            : `<div class="meta-row"><i class="fas fa-calendar-days"></i>${m.schedule}</div>`;
+            ? `<div class="meta-row"><i class="fas fa-clock"></i>${escHtml(m.schedule)} &middot; ${escHtml(m.time)}</div>`
+            : `<div class="meta-row"><i class="fas fa-calendar-days"></i>${escHtml(m.schedule)}</div>`;
 
         card.innerHTML = `
             <div class="card-top">
@@ -97,7 +250,7 @@ function renderCards(list) {
                     <div class="card-title">${escHtml(m.name)}</div>
                     ${nextLabel}
                 </div>
-                <span class="topic-pill ${pillClass}">
+                <span class="topic-pill" style="--tc:${color}">
                     <i class="fas ${icon}"></i> ${cap(m.topic)}
                 </span>
             </div>
@@ -119,65 +272,144 @@ function renderCards(list) {
                         <i class="fas fa-bell"></i>
                         ${active ? 'Reminder Set' : 'Remind Me'}
                     </button>
-                    <a href="${m.meetupUrl}" target="_blank" rel="noopener"
-                       class="view-link ${linkClass}"
+                    <a href="${escHtml(m.meetupUrl)}" target="_blank" rel="noopener"
+                       class="view-link" style="--tc:${color}"
                        onclick="event.stopPropagation()">
                         Meetup.com <i class="fas fa-arrow-up-right-from-square" style="font-size:.65em"></i>
                     </a>
                 </div>
-            </div>
-        `;
+            </div>`;
 
-        // card click → pan map
         card.addEventListener('click', e => {
             if (e.target.closest('.btn-remind') || e.target.closest('.view-link')) return;
-            highlightCard(m.id);
-            panToMeetup(m);
+            highlightCard(m.id); panToMeetup(m);
         });
-
-        // remind-me button click
         card.querySelector('.btn-remind').addEventListener('click', e => {
-            e.stopPropagation();
-            openReminderModal(m);
+            e.stopPropagation(); openReminderModal(m);
         });
-
         container.appendChild(card);
     });
 
-    // update stats
     const totalMembers = list.reduce((s, m) => s + (m.members || 0), 0);
     document.getElementById('stat-events').textContent  = list.length;
     document.getElementById('stat-members').textContent = totalMembers.toLocaleString();
+}
+
+function renderFilterTabs(selectedTopics) {
+    const wrap = document.getElementById('filter-tabs');
+    wrap.innerHTML = '';
+
+    const allBtn = document.createElement('button');
+    allBtn.className = 'ftab active';
+    allBtn.dataset.topic = 'all';
+    allBtn.style.setProperty('--tc', '#1e293b');
+    allBtn.innerHTML = `<i class="fas fa-border-all"></i> All <span class="ftab-count" id="cnt-all">—</span>`;
+    wrap.appendChild(allBtn);
+
+    selectedTopics.forEach(tid => {
+        const t = allTopics[tid]; if (!t) return;
+        const btn = document.createElement('button');
+        btn.className = 'ftab';
+        btn.dataset.topic = tid;
+        btn.innerHTML = `<i class="fas ${t.icon}"></i> ${t.label} <span class="ftab-count" id="cnt-${tid}">—</span>`;
+        wrap.appendChild(btn);
+    });
+
+    wrap.addEventListener('click', e => {
+        const btn = e.target.closest('.ftab'); if (!btn) return;
+        wrap.querySelectorAll('.ftab').forEach(b => {
+            b.classList.remove('active');
+            b.style.removeProperty('background');
+            b.style.removeProperty('border-color');
+        });
+        btn.classList.add('active');
+        const tid = btn.dataset.topic;
+        if (tid === 'all') {
+            btn.style.background = '#1e293b'; btn.style.borderColor = '#1e293b';
+        } else {
+            const color = allTopics[tid]?.color || '#3b82f6';
+            btn.style.background = color; btn.style.borderColor = color;
+        }
+        activeFilter = tid; renderAll();
+    });
+}
+
+function renderBannerLinks(topics, loc) {
+    const city  = loc ? `${loc.city}${loc.state ? ', ' + loc.state : ''}` : 'your area';
+    const wrap  = document.getElementById('banner-links');
+    document.getElementById('banner-location-label').textContent = `Near ${city}`;
+    wrap.innerHTML = topics.slice(0, 4).map(tid => {
+        const t = allTopics[tid]; if (!t) return '';
+        const q = encodeURIComponent(t.label);
+        const l = encodeURIComponent(loc?.city || '') + (loc?.state ? '%2C+' + encodeURIComponent(loc.state) : '');
+        return `<a href="https://www.meetup.com/find/?keywords=${q}&location=${l}&source=EVENTS"
+                   target="_blank" rel="noopener" class="banner-btn">
+                    <i class="fas ${t.icon}"></i> ${t.label}
+                </a>`;
+    }).join('');
+}
+
+function updateCounts() {
+    document.getElementById('cnt-all').textContent = allMeetups.length;
+    document.querySelectorAll('.ftab[data-topic]').forEach(btn => {
+        const tid = btn.dataset.topic;
+        if (tid === 'all') return;
+        const el = document.getElementById(`cnt-${tid}`);
+        if (el) el.textContent = allMeetups.filter(m => m.topic === tid).length;
+    });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Map
 // ══════════════════════════════════════════════════════════════════════════════
 function initMap() {
-    map = L.map('map', { zoomControl: true }).setView(CENTER, 12);
+    map = L.map('map', { zoomControl: true }).setView([39.5, -98.35], 4);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
         maxZoom: 19
     }).addTo(map);
-    L.circle(CENTER, {
-        radius: RADIUS_MI * 1609.34, color: '#3b82f6', weight: 1.5,
+}
+
+function updateMapCenter(loc, radiusMi) {
+    if (centerMarker) { map.removeLayer(centerMarker); centerMarker = null; }
+    if (radiusCircle) { map.removeLayer(radiusCircle); radiusCircle = null; }
+
+    const latlng = [loc.lat, loc.lng];
+    const label  = loc.city ? `${loc.city}${loc.state ? ', ' + loc.state : ''}` : 'Search center';
+
+    radiusCircle = L.circle(latlng, {
+        radius: radiusMi * 1609.34, color: '#3b82f6', weight: 1.5,
         fillColor: '#3b82f6', fillOpacity: .05, dashArray: '6 4'
     }).addTo(map);
-    L.marker(CENTER, { icon: makeIcon('#dc2626') }).addTo(map)
-        .bindPopup('<strong>Issaquah, WA</strong><br>Search center');
+
+    centerMarker = L.marker(latlng, { icon: makeIcon('#dc2626') }).addTo(map)
+        .bindPopup(`<strong>${escHtml(label)}</strong><br>Search center`);
+
+    map.setView(latlng, 12, { animate: true });
 }
 
 function renderMap(list) {
     markers.forEach(m => map.removeLayer(m));
     markers = [];
+
+    // Update legend
+    const legend = document.getElementById('map-legend');
+    const seenTopics = [...new Set(list.map(m => m.topic))];
+    legend.innerHTML = '<div class="leg-row"><span class="ldot red"></span> You</div>';
+    seenTopics.forEach(tid => {
+        const color = allTopics[tid]?.color || '#64748b';
+        const label = allTopics[tid]?.label || cap(tid);
+        legend.innerHTML += `<div class="leg-row"><span class="ldot" style="background:${color}"></span> ${label}</div>`;
+    });
+
     list.forEach(m => {
-        const color  = m.topic === 'tennis' ? '#16a34a' : '#2563eb';
+        const color  = m.color || allTopics[m.topic]?.color || '#64748b';
         const marker = L.marker([m.lat, m.lng], { icon: makeIcon(color) })
             .addTo(map)
             .bindPopup(`
                 <strong>${escHtml(m.name)}</strong><br>
                 <span style="color:#64748b;font-size:.82em">${escHtml(m.venue)}</span><br>
-                <span style="font-size:.78em">${m.schedule}${m.time ? ' · ' + m.time : ''}</span><br>
+                <span style="font-size:.78em">${escHtml(m.schedule)}${m.time ? ' · ' + m.time : ''}</span><br>
                 <span style="font-size:.78em">📍 ${m.distanceMi} mi away</span>
             `);
         marker.on('click', () => highlightCard(m.id));
@@ -203,41 +435,30 @@ function makeIcon(color) {
 // ══════════════════════════════════════════════════════════════════════════════
 // Reminder Modal
 // ══════════════════════════════════════════════════════════════════════════════
-
-// ── localStorage helpers ──────────────────────────────────────────────────────
 function getActiveReminder(eventId) {
-    try {
-        const stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
-        return stored[eventId] || null;
-    } catch { return null; }
+    try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}')[eventId] || null; }
+    catch { return null; }
 }
-
 function saveActiveReminder(eventId, data) {
-    const stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
-    stored[eventId] = data;
-    localStorage.setItem(LS_KEY, JSON.stringify(stored));
+    const s = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+    s[eventId] = data; localStorage.setItem(LS_KEY, JSON.stringify(s));
 }
-
 function removeActiveReminder(eventId) {
-    const stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
-    delete stored[eventId];
-    localStorage.setItem(LS_KEY, JSON.stringify(stored));
+    const s = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+    delete s[eventId]; localStorage.setItem(LS_KEY, JSON.stringify(s));
 }
 
-// ── Open / close ──────────────────────────────────────────────────────────────
 function openReminderModal(meetup) {
     modalMeetup = meetup;
-
-    // populate header
-    document.getElementById('modal-event-name').textContent = meetup.name;
-    document.getElementById('modal-event-meta').textContent =
+    document.getElementById('modal-event-name').textContent  = meetup.name;
+    document.getElementById('modal-event-meta').textContent  =
         [meetup.nextDate, meetup.time].filter(Boolean).join(' · ');
     document.getElementById('modal-event-venue').textContent = meetup.venue;
 
-    // topic colour on bell
+    const color = meetup.color || allTopics[meetup.topic]?.color || '#3b82f6';
     const bellWrap = document.getElementById('modal-bell-icon');
-    bellWrap.style.background = meetup.topic === 'tennis' ? '#dcfce7' : '#dbeafe';
-    bellWrap.style.color      = meetup.topic === 'tennis' ? '#16a34a' : '#2563eb';
+    bellWrap.style.background = color + '22';
+    bellWrap.style.color      = color;
 
     const existing = getActiveReminder(meetup.id);
     existing ? showPanelManage(existing) : showPanelForm();
@@ -253,64 +474,42 @@ function closeModal() {
     resetForm();
 }
 
-// ── Panel switching ───────────────────────────────────────────────────────────
 function showPanelForm() {
     document.getElementById('panel-form').classList.remove('hidden');
     document.getElementById('panel-success').classList.add('hidden');
     document.getElementById('panel-manage').classList.add('hidden');
 }
-
 function showPanelSuccess(message, channels) {
     document.getElementById('panel-form').classList.add('hidden');
     document.getElementById('panel-success').classList.remove('hidden');
     document.getElementById('panel-manage').classList.add('hidden');
     document.getElementById('success-msg').textContent = message;
-
-    const ch = document.getElementById('success-channels');
-    ch.innerHTML = channels.map(c =>
+    document.getElementById('success-channels').innerHTML = channels.map(c =>
         `<span><i class="fas ${c.icon}" style="margin-right:.3rem"></i>${escHtml(c.text)}</span>`
     ).join('');
 }
-
 function showPanelManage(reminder) {
     document.getElementById('panel-form').classList.add('hidden');
     document.getElementById('panel-success').classList.add('hidden');
     document.getElementById('panel-manage').classList.remove('hidden');
-
-    const labels = (reminder.intervals || []).sort((a,b)=>b-a)
-        .map(h => `${h}h before`).join(', ');
-
-    const rows = [`
-        <div class="manage-row">
-            <i class="fas fa-clock"></i>
-            <span>Reminders at: <strong>${labels}</strong></span>
-        </div>
-    `];
-    if (reminder.email)
-        rows.push(`<div class="manage-row"><i class="fas fa-envelope"></i><span>${escHtml(reminder.email)}</span></div>`);
-    if (reminder.phone)
-        rows.push(`<div class="manage-row"><i class="fas fa-mobile-screen-button"></i><span>${escHtml(reminder.phone)}</span></div>`);
-
+    const labels = (reminder.intervals || []).sort((a,b)=>b-a).map(h => `${h}h before`).join(', ');
+    const rows = [`<div class="manage-row"><i class="fas fa-clock"></i><span>Reminders at: <strong>${labels}</strong></span></div>`];
+    if (reminder.email) rows.push(`<div class="manage-row"><i class="fas fa-envelope"></i><span>${escHtml(reminder.email)}</span></div>`);
+    if (reminder.phone) rows.push(`<div class="manage-row"><i class="fas fa-mobile-screen-button"></i><span>${escHtml(reminder.phone)}</span></div>`);
     document.getElementById('manage-details').innerHTML = rows.join('');
-    document.getElementById('btn-cancel-reminder').disabled = false;
-    document.getElementById('btn-cancel-reminder').innerHTML =
-        '<i class="fas fa-bell-slash"></i> Cancel Reminder';
+    const btn = document.getElementById('btn-cancel-reminder');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-bell-slash"></i> Cancel Reminder';
 }
 
-// ── Submit ────────────────────────────────────────────────────────────────────
 async function submitReminder() {
     const email     = document.getElementById('input-email').value.trim();
     const phone     = document.getElementById('input-phone').value.trim();
-    const intervals = Array.from(
-        document.querySelectorAll('input[name="interval"]:checked')
-    ).map(cb => parseInt(cb.value));
+    const intervals = Array.from(document.querySelectorAll('input[name="interval"]:checked'))
+                          .map(cb => parseInt(cb.value));
 
-    if (!email && !phone) {
-        showFormError('Enter an email address or phone number (or both).'); return;
-    }
-    if (!intervals.length) {
-        showFormError('Select at least one reminder time.'); return;
-    }
+    if (!email && !phone) { showFormError('Enter an email address or phone number (or both).'); return; }
+    if (!intervals.length) { showFormError('Select at least one reminder time.'); return; }
 
     const btn = document.getElementById('btn-modal-submit');
     btn.disabled = true;
@@ -321,28 +520,30 @@ async function submitReminder() {
         const res  = await fetch('/api/reminders', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ eventId: modalMeetup.id, email, phone, intervals })
+            body: JSON.stringify({
+                eventId:       modalMeetup.id,
+                eventName:     modalMeetup.name,
+                eventDatetime: modalMeetup.eventDatetime,
+                eventNextDate: modalMeetup.nextDate,
+                eventTime:     modalMeetup.time,
+                eventVenue:    modalMeetup.venue,
+                topic:         modalMeetup.topic,
+                email, phone, intervals,
+            })
         });
         const data = await res.json();
-
         if (!res.ok) {
-            showFormError(data.error || 'Failed to set reminder. Please try again.');
+            showFormError(data.error || 'Failed to set reminder.');
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-bell"></i> Set Reminder';
             return;
         }
-
-        // persist in localStorage
         saveActiveReminder(modalMeetup.id, { id: data.id, intervals, email: email||null, phone: phone||null });
         updateCardBell(modalMeetup.id, true);
-
-        // build channel list for success panel
         const channels = [];
         if (email) channels.push({ icon: 'fa-envelope', text: email });
         if (phone) channels.push({ icon: 'fa-mobile-screen-button', text: phone });
-
         showPanelSuccess(data.message, channels);
-
     } catch (err) {
         showFormError('Network error — is the server running?');
         btn.disabled = false;
@@ -350,56 +551,38 @@ async function submitReminder() {
     }
 }
 
-// ── Cancel reminder ───────────────────────────────────────────────────────────
 async function cancelReminder() {
     const existing = getActiveReminder(modalMeetup.id);
     if (!existing) return;
-
     const btn = document.getElementById('btn-cancel-reminder');
-    btn.disabled = true;
-    btn.textContent = 'Cancelling…';
-
-    try {
-        await fetch(`/api/reminders/${existing.id}`, { method: 'DELETE' });
-    } catch (_) { /* network error — still clear locally */ }
-
+    btn.disabled = true; btn.textContent = 'Cancelling…';
+    try { await fetch(`/api/reminders/${existing.id}`, { method: 'DELETE' }); } catch (_) {}
     removeActiveReminder(modalMeetup.id);
     updateCardBell(modalMeetup.id, false);
     closeModal();
 }
 
-// ── Card bell state ───────────────────────────────────────────────────────────
 function updateCardBell(eventId, active) {
     const card = document.querySelector(`.meetup-card[data-id="${eventId}"]`);
     if (!card) return;
     const btn = card.querySelector('.btn-remind');
     if (!btn) return;
-    if (active) {
-        btn.classList.add('bell-active');
-        btn.innerHTML = '<i class="fas fa-bell"></i> Reminder Set';
-    } else {
-        btn.classList.remove('bell-active');
-        btn.innerHTML = '<i class="fas fa-bell"></i> Remind Me';
-    }
+    btn.classList.toggle('bell-active', active);
+    btn.innerHTML = `<i class="fas fa-bell"></i> ${active ? 'Reminder Set' : 'Remind Me'}`;
 }
 
-// ── Form helpers ──────────────────────────────────────────────────────────────
 function showFormError(msg) {
     const el = document.getElementById('form-error');
-    el.textContent = msg;
-    el.classList.remove('hidden');
+    el.textContent = msg; el.classList.remove('hidden');
 }
-function hideFormError() {
-    document.getElementById('form-error').classList.add('hidden');
-}
+function hideFormError() { document.getElementById('form-error').classList.add('hidden'); }
 function resetForm() {
     document.getElementById('input-email').value = '';
     document.getElementById('input-phone').value = '';
     document.querySelectorAll('input[name="interval"]').forEach(cb => { cb.checked = true; });
     hideFormError();
     const btn = document.getElementById('btn-modal-submit');
-    btn.disabled = false;
-    btn.innerHTML = '<i class="fas fa-bell"></i> Set Reminder';
+    btn.disabled = false; btn.innerHTML = '<i class="fas fa-bell"></i> Set Reminder';
     showPanelForm();
 }
 
@@ -410,14 +593,6 @@ function highlightCard(id) {
     document.querySelectorAll('.meetup-card').forEach(c => c.classList.remove('highlighted'));
     const card = document.querySelector(`.meetup-card[data-id="${id}"]`);
     if (card) { card.classList.add('highlighted'); card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
-}
-
-function updateCounts() {
-    const tennis  = allMeetups.filter(m => m.topic === 'tennis').length;
-    const science = allMeetups.filter(m => m.topic === 'science').length;
-    document.getElementById('cnt-all').textContent     = allMeetups.length;
-    document.getElementById('cnt-tennis').textContent  = tennis;
-    document.getElementById('cnt-science').textContent = science;
 }
 
 function renderSourceBadge(source, fetchedAt) {
@@ -433,13 +608,43 @@ function renderSourceBadge(source, fetchedAt) {
     }
 }
 
+function setLocationChip(loc) {
+    if (!loc || !loc.city) return;
+    const chip = document.getElementById('location-chip');
+    chip.innerHTML = `<i class="fas fa-location-dot"></i> ${escHtml(loc.city)}${loc.state ? ', ' + escHtml(loc.state) : ''}${loc.zip ? ' · ' + loc.zip : ''}`;
+    chip.classList.remove('hidden');
+}
+
+function updateStatRadius(r) {
+    document.getElementById('stat-radius').textContent = `${r} mi`;
+}
+
+function showResultsArea(show) {
+    document.getElementById('prompt-state').classList.toggle('hidden', show);
+    document.getElementById('results-wrap').classList.toggle('hidden', !show);
+    if (show) {
+        document.getElementById('loading-state').classList.remove('hidden');
+        document.getElementById('error-state').classList.add('hidden');
+        document.getElementById('cards').innerHTML = '';
+    }
+}
+
+function setSearchLoading(loading, msg) {
+    if (loading) {
+        showResultsArea(true);
+        document.getElementById('loading-state').classList.remove('hidden');
+        document.getElementById('loading-state').querySelector('p').textContent = msg || 'Loading…';
+    }
+}
+
 function setLoadingState(loading) {
     document.getElementById('loading-state').classList.toggle('hidden', !loading);
     document.getElementById('error-state').classList.add('hidden');
     const btn = document.getElementById('btn-refresh');
-    btn.disabled = loading;
+    if (!loading) btn.disabled = false;
     btn.querySelector('i').classList.toggle('fa-spin', loading);
 }
+
 function setErrorState(msg) {
     document.getElementById('loading-state').classList.add('hidden');
     document.getElementById('error-state').classList.remove('hidden');
@@ -452,50 +657,5 @@ function escHtml(s) {
 }
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Event listeners
-// ══════════════════════════════════════════════════════════════════════════════
-
-// Filter tabs
-document.getElementById('filter-tabs').addEventListener('click', e => {
-    const btn = e.target.closest('.ftab');
-    if (!btn) return;
-    document.querySelectorAll('.ftab').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    activeFilter = btn.dataset.topic;
-    renderAll();
-});
-
-// Sort
-document.getElementById('sort-select').addEventListener('change', e => {
-    activeSort = e.target.value;
-    renderAll();
-});
-
-// Refresh
-document.getElementById('btn-refresh').addEventListener('click', loadMeetups);
-
-// Modal close
-document.getElementById('modal-close').addEventListener('click', closeModal);
-document.getElementById('btn-modal-cancel').addEventListener('click', closeModal);
-document.getElementById('btn-success-done').addEventListener('click', closeModal);
-document.getElementById('btn-manage-close').addEventListener('click', closeModal);
-document.getElementById('btn-cancel-reminder').addEventListener('click', cancelReminder);
-document.getElementById('btn-modal-submit').addEventListener('click', submitReminder);
-
-// Close on overlay click
-document.getElementById('reminder-modal').addEventListener('click', e => {
-    if (e.target === document.getElementById('reminder-modal')) closeModal();
-});
-
-// Close on Escape
-document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeModal();
-});
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Boot
-// ══════════════════════════════════════════════════════════════════════════════
-initMap();
-loadStatus();
-loadMeetups();
+// ── Start ──────────────────────────────────────────────────────────────────
+boot();
