@@ -543,6 +543,55 @@ body {
 .manage-row { display: flex; align-items: center; gap: .4rem; }
 .manage-row i { width: 14px; text-align: center; color: #94a3b8; }
 
+/* ── Meetup.com auth ──────────────────────────────────────────────────────── */
+.btn-connect-meetup {
+    display: inline-flex; align-items: center; gap: .35rem;
+    background: #e63946; color: #fff; border-radius: 50px;
+    padding: .3rem .9rem; font-size: .78rem; font-weight: 700;
+    text-decoration: none; transition: background .2s; white-space: nowrap;
+}
+.btn-connect-meetup:hover { background: #c1121f; color: #fff; }
+
+.auth-disconnect {
+    display: inline-flex; align-items: center;
+    margin-left: .35rem; color: #94a3b8; font-size: .75rem;
+    text-decoration: none; transition: color .15s;
+}
+.auth-disconnect:hover { color: #dc2626; }
+
+.auth-banner {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .6rem 1.4rem; font-size: .85rem; font-weight: 600;
+    border-bottom: 1px solid rgba(0,0,0,.06);
+}
+.auth-banner.hidden { display: none !important; }
+
+/* Token display in post-connect modal */
+.token-block {
+    background: #f8fafc; border: 1.5px solid var(--border);
+    border-radius: 10px; padding: .75rem 1rem;
+    display: flex; flex-direction: column; gap: .5rem;
+    font-size: .8rem;
+}
+.token-row {
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+}
+.token-key {
+    font-family: monospace; font-size: .75rem; font-weight: 700;
+    color: #7c3aed; min-width: 200px;
+}
+.token-val {
+    font-family: monospace; font-size: .75rem; color: #1e293b;
+    word-break: break-all; flex: 1;
+}
+.token-secret { color: #94a3b8; font-style: italic; font-family: inherit; }
+.btn-copy {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: .2rem .5rem; cursor: pointer; color: var(--muted); font-size: .75rem;
+    transition: background .15s;
+}
+.btn-copy:hover { background: #e2e8f0; }
+
 /* ── Auto-refresh toast ───────────────────────────────────────────────────── */
 .auto-refresh-toast {
     position: fixed; bottom: 1.75rem; left: 50%; transform: translateX(-50%);

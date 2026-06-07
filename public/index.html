@@ -74,6 +74,7 @@
         </span>
         <span id="fetched-at" class="fetched-at"></span>
     </div>
+    <div class="stat" id="stat-meetup-auth"></div>
     <div class="stat" id="stat-refresh-wrap" style="display:none">
         <i class="fas fa-clock" style="color:#8b5cf6"></i>
         <span>Auto-refresh: <strong id="next-refresh-time">9:00 AM ET</strong></span>
@@ -115,6 +116,7 @@
             <div class="sort-wrap">
                 <label for="sort-select"><i class="fas fa-sort"></i></label>
                 <select id="sort-select">
+                    <option value="date">Date (soonest)</option>
                     <option value="distance">Nearest first</option>
                     <option value="members">Most members</option>
                     <option value="attending">Most attending</option>
@@ -237,6 +239,36 @@
             </div>
         </div>
 
+    </div>
+</div>
+
+<!-- OAuth result banner (shown after redirect back from Meetup.com) -->
+<div id="auth-banner" class="auth-banner hidden"></div>
+
+<!-- Post-connect modal: shows refresh token for Render setup -->
+<div class="modal-overlay hidden" id="token-modal">
+    <div class="modal-card" style="max-width:520px">
+        <button class="modal-close" id="token-modal-close"><i class="fas fa-xmark"></i></button>
+        <div style="text-align:center;margin-bottom:1.25rem">
+            <div style="width:52px;height:52px;border-radius:50%;background:#d1fae5;color:#059669;display:flex;align-items:center;justify-content:center;font-size:1.4rem;margin:0 auto .85rem">
+                <i class="fas fa-circle-check"></i>
+            </div>
+            <h3 style="font-size:1.1rem;font-weight:800;margin-bottom:.3rem">Meetup.com Connected!</h3>
+            <p style="font-size:.85rem;color:#64748b">Live events will now appear when you search.</p>
+        </div>
+        <div id="token-render-section">
+            <p class="panel-label">Deploy to Render? Add these env vars</p>
+            <div class="token-block">
+                <div class="token-row"><span class="token-key">MEETUP_CLIENT_ID</span><span class="token-val" id="tv-cid"></span></div>
+                <div class="token-row"><span class="token-key">MEETUP_CLIENT_SECRET</span><span class="token-val token-secret">set in Render dashboard</span></div>
+                <div class="token-row"><span class="token-key">MEETUP_REFRESH_TOKEN</span><span class="token-val" id="tv-refresh"></span><button class="btn-copy" id="btn-copy-refresh" title="Copy"><i class="fas fa-copy"></i></button></div>
+                <div class="token-row"><span class="token-key">MEETUP_REDIRECT_URI</span><span class="token-val token-secret">https://your-app.onrender.com/auth/callback</span></div>
+            </div>
+            <p style="font-size:.75rem;color:#94a3b8;margin-top:.75rem">The refresh token lets Render auto-renew access without re-authenticating.</p>
+        </div>
+        <div class="modal-actions">
+            <button class="btn-modal-primary" id="token-modal-done">Got it</button>
+        </div>
     </div>
 </div>
 

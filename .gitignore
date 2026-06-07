@@ -1,5 +1,6 @@
 reminders.json
 .env
+.meetup_token.json
 *.bak
 __pycache__/
 *.pyc

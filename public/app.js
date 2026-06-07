@@ -34,6 +34,16 @@ async function boot() {
     });
 
     scheduleAutoRefresh();
+    await checkAuthStatus();
+    handleAuthCallback();
+
+    // Token modal close
+    const closeTokenModal = () => {
+        document.getElementById('token-modal').classList.add('hidden');
+        document.body.style.overflow = '';
+    };
+    document.getElementById('token-modal-close')?.addEventListener('click', closeTokenModal);
+    document.getElementById('token-modal-done')?.addEventListener('click', closeTokenModal);
 
     // Modal controls
     document.getElementById('modal-close').addEventListener('click', closeModal);
@@ -763,6 +773,85 @@ function showAutoRefreshToast() {
     t.innerHTML = '<i class="fas fa-rotate-right"></i> Results refreshed — showing next 7 days';
     document.body.appendChild(t);
     setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 400); }, 3500);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Meetup.com auth
+// ══════════════════════════════════════════════════════════════════════════════
+async function checkAuthStatus() {
+    try {
+        const res  = await fetch('/api/auth/status');
+        const data = await res.json();
+        renderAuthStat(data);
+        return data;
+    } catch (_) { return {}; }
+}
+
+function renderAuthStat({ connected, configured }) {
+    const el = document.getElementById('stat-meetup-auth');
+    if (!el) return;
+    if (connected) {
+        el.innerHTML = `
+            <i class="fas fa-circle" style="color:#10b981;font-size:.55rem"></i>
+            <span style="color:#065f46;font-weight:700;font-size:.82rem">Meetup.com Live</span>
+            <a href="/auth/disconnect" class="auth-disconnect" title="Disconnect"
+               onclick="return confirm('Disconnect Meetup.com?')">
+                <i class="fas fa-xmark"></i>
+            </a>`;
+    } else if (configured) {
+        el.innerHTML = `<a href="/auth/meetup" class="btn-connect-meetup">
+            <i class="fas fa-plug"></i> Connect Meetup.com
+        </a>`;
+    }
+}
+
+function handleAuthCallback() {
+    const sp     = new URLSearchParams(window.location.search);
+    const result = sp.get('auth');
+    if (!result) return;
+
+    // Remove ?auth=... from URL without reloading
+    const clean = window.location.pathname;
+    window.history.replaceState({}, '', clean);
+
+    if (result === 'success') {
+        // Show post-connect modal with refresh token
+        fetch('/api/auth/status').then(r => r.json()).then(data => {
+            const cid     = document.getElementById('tv-cid');
+            const refresh = document.getElementById('tv-refresh');
+            if (cid)     cid.textContent     = '(set in Render dashboard)';
+            if (refresh) refresh.textContent = data.refreshToken || '(unavailable)';
+
+            document.getElementById('btn-copy-refresh')?.addEventListener('click', () => {
+                navigator.clipboard.writeText(data.refreshToken || '');
+                document.getElementById('btn-copy-refresh').innerHTML = '<i class="fas fa-check"></i>';
+                setTimeout(() => {
+                    document.getElementById('btn-copy-refresh').innerHTML = '<i class="fas fa-copy"></i>';
+                }, 2000);
+            });
+
+            document.getElementById('token-modal').classList.remove('hidden');
+            document.body.style.overflow = 'hidden';
+        });
+        renderAuthBanner('success', 'Connected to Meetup.com — live events are now active.');
+    } else if (result === 'denied') {
+        renderAuthBanner('warn', 'Meetup.com authorization was cancelled.');
+    } else {
+        renderAuthBanner('error', 'Could not connect to Meetup.com. Check your Client ID and Secret.');
+    }
+}
+
+function renderAuthBanner(type, msg) {
+    const el = document.getElementById('auth-banner');
+    if (!el) return;
+    const colors = { success: '#d1fae5:#065f46', warn: '#fef9c3:#854d0e', error: '#fef2f2:#dc2626' };
+    const [bg, fg] = (colors[type] || colors.warn).split(':');
+    const icon = type === 'success' ? 'fa-circle-check' : type === 'warn' ? 'fa-triangle-exclamation' : 'fa-circle-xmark';
+    el.style.cssText = `background:${bg};color:${fg}`;
+    el.innerHTML = `<i class="fas ${icon}"></i> ${msg}
+        <button onclick="this.parentElement.classList.add('hidden')" style="background:none;border:none;cursor:pointer;color:inherit;margin-left:.5rem;font-size:1rem">&times;</button>`;
+    el.classList.remove('hidden');
+    if (type === 'success') setTimeout(() => el.classList.add('hidden'), 8000);
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────

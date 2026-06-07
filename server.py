@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Meetup Finder — dynamic zip-based search with reminder scheduling."""
 
-import json, os, re, math, mimetypes, base64, calendar
+import json, os, re, math, mimetypes, base64, calendar, secrets
 import urllib.request, urllib.error, urllib.parse
 import smtplib, uuid, threading, time
 from email.mime.multipart import MIMEMultipart
@@ -13,8 +13,67 @@ from datetime              import datetime, timezone, timedelta, date
 PORT           = int(os.environ.get('PORT', 3000))
 PUBLIC_DIR     = Path(__file__).parent / 'public'
 REMINDERS_FILE = Path(__file__).parent / 'reminders.json'
+TOKEN_FILE     = Path(__file__).parent / '.meetup_token.json'
 MEETUP_GQL     = 'https://api.meetup.com/gql'
 _lock          = threading.Lock()
+_oauth_states  = {}   # { state_token: timestamp } for CSRF protection
+
+# ── Meetup OAuth token management ────────────────────────────────────────────
+def load_token():
+    if TOKEN_FILE.exists():
+        try: return json.loads(TOKEN_FILE.read_text())
+        except: pass
+    return None
+
+def save_token(tok):
+    TOKEN_FILE.write_text(json.dumps(tok, indent=2))
+
+def _meetup_redirect_uri():
+    custom = os.environ.get('MEETUP_REDIRECT_URI', '').strip()
+    return custom or f'http://localhost:{PORT}/auth/callback'
+
+def _refresh_access_token(refresh_tok):
+    cid = os.environ.get('MEETUP_CLIENT_ID', '').strip()
+    sec = os.environ.get('MEETUP_CLIENT_SECRET', '').strip()
+    if not (cid and sec and refresh_tok): return None
+    data = urllib.parse.urlencode({
+        'client_id': cid, 'client_secret': sec,
+        'grant_type': 'refresh_token', 'refresh_token': refresh_tok,
+    }).encode()
+    req = urllib.request.Request('https://secure.meetup.com/oauth2/access', data=data,
+          headers={'Content-Type': 'application/x-www-form-urlencoded'}, method='POST')
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            r = json.loads(resp.read())
+        tok = {
+            'access_token':  r['access_token'],
+            'refresh_token': r.get('refresh_token', refresh_tok),
+            'expires_at':    time.time() + r.get('expires_in', 3600),
+        }
+        save_token(tok)
+        print('  [Meetup OAuth] Token refreshed')
+        return tok['access_token']
+    except Exception as exc:
+        print(f'  [Meetup OAuth] Refresh failed: {exc}')
+        return None
+
+def get_valid_token():
+    # 1. Try token file (local dev / recent auth)
+    tok = load_token()
+    if tok:
+        if time.time() < tok.get('expires_at', 0) - 300:
+            return tok['access_token']
+        new_tok = _refresh_access_token(tok.get('refresh_token', ''))
+        if new_tok: return new_tok
+
+    # 2. Refresh token from env var (Render / production)
+    env_refresh = os.environ.get('MEETUP_REFRESH_TOKEN', '').strip()
+    if env_refresh:
+        new_tok = _refresh_access_token(env_refresh)
+        if new_tok: return new_tok
+
+    # 3. Static access token (legacy fallback)
+    return os.environ.get('MEETUP_ACCESS_TOKEN', '').strip() or None
 
 # ── Topic catalogue ───────────────────────────────────────────────────────────
 TOPICS = {
@@ -422,7 +481,7 @@ def _haversine(lat1, lon1, lat2, lon2):
     return R * 2 * math.asin(math.sqrt(a))
 
 def fetch_live_events(topic, lat, lng, radius_miles):
-    token = os.environ.get('MEETUP_ACCESS_TOKEN', '').strip()
+    token = get_valid_token()
     if not token: return None
     payload = json.dumps({'query': GQL_QUERY,
                           'variables': {'query': topic, 'lat': lat,
@@ -464,6 +523,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         print(f'  {self.address_string()}  {fmt % args}')
+
+    def _redirect(self, url, status=302):
+        self.send_response(status)
+        self.send_header('Location', url)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
 
     def _send_json(self, obj, status=200):
         body = json.dumps(obj, default=str).encode()
@@ -507,6 +572,69 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path   = self.path.split('?')[0]
         params = self._qs(self.path)
+
+        # ── /auth/meetup → start OAuth ───────────────────────────────────────
+        if path == '/auth/meetup':
+            cid = os.environ.get('MEETUP_CLIENT_ID', '').strip()
+            if not cid:
+                self._send_json({'error': 'MEETUP_CLIENT_ID not configured'}, 503); return
+            state = secrets.token_urlsafe(16)
+            _oauth_states[state] = time.time()
+            qs = urllib.parse.urlencode({
+                'client_id': cid, 'response_type': 'code',
+                'redirect_uri': _meetup_redirect_uri(),
+                'scope': 'basic', 'state': state,
+            })
+            self._redirect(f'https://secure.meetup.com/oauth2/authorize?{qs}'); return
+
+        # ── /auth/callback → exchange code for tokens ─────────────────────
+        if path == '/auth/callback':
+            code  = params.get('code', '')
+            state = params.get('state', '')
+            if params.get('error') or not code:
+                self._redirect('/?auth=denied'); return
+            if state not in _oauth_states:
+                self._redirect('/?auth=invalid'); return
+            del _oauth_states[state]
+
+            cid = os.environ.get('MEETUP_CLIENT_ID', '').strip()
+            sec = os.environ.get('MEETUP_CLIENT_SECRET', '').strip()
+            data = urllib.parse.urlencode({
+                'client_id': cid, 'client_secret': sec,
+                'grant_type': 'authorization_code',
+                'code': code, 'redirect_uri': _meetup_redirect_uri(),
+            }).encode()
+            req = urllib.request.Request('https://secure.meetup.com/oauth2/access', data=data,
+                  headers={'Content-Type': 'application/x-www-form-urlencoded'}, method='POST')
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    r = json.loads(resp.read())
+                tok = {
+                    'access_token':  r['access_token'],
+                    'refresh_token': r.get('refresh_token', ''),
+                    'expires_at':    time.time() + r.get('expires_in', 3600),
+                }
+                save_token(tok)
+                print('  [Meetup OAuth] Connected successfully')
+                self._redirect('/?auth=success'); return
+            except Exception as exc:
+                print(f'  [Meetup OAuth] Token exchange failed: {exc}')
+                self._redirect('/?auth=failed'); return
+
+        # ── /auth/disconnect ──────────────────────────────────────────────
+        if path == '/auth/disconnect':
+            if TOKEN_FILE.exists(): TOKEN_FILE.unlink()
+            self._redirect('/'); return
+
+        # ── /api/auth/status ──────────────────────────────────────────────
+        if path == '/api/auth/status':
+            tok      = load_token()
+            live_tok = get_valid_token()
+            self._send_json({
+                'connected':    bool(live_tok),
+                'configured':   bool(os.environ.get('MEETUP_CLIENT_ID')),
+                'refreshToken': (tok or {}).get('refresh_token', ''),
+            }); return
 
         # ── /api/topics ──────────────────────────────────────────────────────
         if path == '/api/topics':
@@ -563,7 +691,7 @@ class Handler(BaseHTTPRequestHandler):
                 loc = {'lat': lat, 'lng': lng, 'city': 'Local', 'state': '', 'zip': ''}
 
             source, results = 'sample', []
-            if os.environ.get('MEETUP_ACCESS_TOKEN'):
+            if get_valid_token():
                 for t in topic_list:
                     live = fetch_live_events(t, loc['lat'], loc['lng'], radius)
                     if live: results.extend(live); source = 'live'
