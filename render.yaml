@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: meetup-finder-issaquah
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: "echo 'No build step needed'"
+    startCommand: "python3 server.py"
+    envVars:
+      - key: PORT
+        value: 10000
+      # Optional — add in Render dashboard to enable live features:
+      # MEETUP_ACCESS_TOKEN  — live Meetup.com events
+      # SMTP_HOST / SMTP_USER / SMTP_PASS / SMTP_FROM  — email reminders
+      # TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER  — SMS reminders

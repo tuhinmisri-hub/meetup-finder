@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meetup Finder — Issaquah, WA</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────────────── -->
+<header class="app-header">
+    <h1><i class="fas fa-map-location-dot"></i> Meetup Finder</h1>
+    <p class="header-sub">Discover local groups &amp; upcoming events near you</p>
+    <div class="header-chips">
+        <span class="chip"><i class="fas fa-location-dot"></i> Issaquah, WA</span>
+        <span class="chip"><i class="fas fa-circle-notch"></i> Within 5 Miles</span>
+        <span class="chip"><i class="fas fa-table-tennis-paddle-ball"></i> Tennis</span>
+        <span class="chip"><i class="fas fa-flask"></i> Science</span>
+    </div>
+</header>
+
+<!-- ── Stats bar ──────────────────────────────────────────────────────────── -->
+<div class="stats-bar">
+    <div class="stat">
+        <i class="fas fa-calendar-check" style="color:#3b82f6"></i>
+        <span><strong id="stat-events">—</strong> Events</span>
+    </div>
+    <div class="stat">
+        <i class="fas fa-users" style="color:#10b981"></i>
+        <span><strong id="stat-members">—</strong> Members</span>
+    </div>
+    <div class="stat">
+        <i class="fas fa-route" style="color:#f59e0b"></i>
+        <span>Radius: <strong>5 miles</strong></span>
+    </div>
+    <div class="stat">
+        <span id="source-badge" class="source-badge source-loading">
+            <i class="fas fa-circle-notch fa-spin"></i> Loading…
+        </span>
+        <span id="fetched-at" class="fetched-at"></span>
+    </div>
+    <div class="stat" style="margin-left:auto">
+        <button id="btn-refresh" class="btn-refresh">
+            <i class="fas fa-rotate-right"></i> Refresh
+        </button>
+    </div>
+</div>
+
+<!-- ── Main ───────────────────────────────────────────────────────────────── -->
+<main class="main-wrap">
+
+    <div class="live-banner">
+        <div>
+            <strong><i class="fas fa-arrow-up-right-from-square"></i> Find Live Events on Meetup.com</strong>
+            <span class="banner-sub">Real-time events near Issaquah, WA</span>
+        </div>
+        <div class="banner-links">
+            <a href="https://www.meetup.com/find/?keywords=tennis&location=Issaquah%2C+WA&source=EVENTS&distance=fiveMiles"
+               target="_blank" rel="noopener" class="banner-btn">
+                <i class="fas fa-table-tennis-paddle-ball"></i> Tennis
+            </a>
+            <a href="https://www.meetup.com/find/?keywords=science&location=Issaquah%2C+WA&source=EVENTS&distance=fiveMiles"
+               target="_blank" rel="noopener" class="banner-btn">
+                <i class="fas fa-flask"></i> Science
+            </a>
+        </div>
+    </div>
+
+    <div class="controls-row">
+        <div class="filter-tabs" id="filter-tabs">
+            <button class="ftab active" data-topic="all">
+                <i class="fas fa-border-all"></i> All
+                <span class="ftab-count" id="cnt-all">—</span>
+            </button>
+            <button class="ftab" data-topic="tennis">
+                <i class="fas fa-table-tennis-paddle-ball"></i> Tennis
+                <span class="ftab-count tennis-cnt" id="cnt-tennis">—</span>
+            </button>
+            <button class="ftab" data-topic="science">
+                <i class="fas fa-flask"></i> Science
+                <span class="ftab-count science-cnt" id="cnt-science">—</span>
+            </button>
+        </div>
+        <div class="sort-wrap">
+            <label for="sort-select"><i class="fas fa-sort"></i></label>
+            <select id="sort-select">
+                <option value="distance">Nearest first</option>
+                <option value="members">Most members</option>
+                <option value="attending">Most attending</option>
+                <option value="name">A – Z</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="content-grid">
+        <section class="cards-panel" id="cards-panel">
+            <div class="loading-state" id="loading-state">
+                <i class="fas fa-circle-notch fa-spin fa-2x"></i>
+                <p>Fetching meetups…</p>
+            </div>
+            <div class="error-state hidden" id="error-state">
+                <i class="fas fa-triangle-exclamation fa-2x"></i>
+                <p id="error-msg">Could not load meetups.</p>
+                <button class="btn-retry" onclick="loadMeetups()">Try again</button>
+            </div>
+            <div id="cards"></div>
+        </section>
+
+        <section class="map-panel">
+            <div id="map"></div>
+            <div class="map-legend">
+                <div class="leg-row"><span class="ldot green"></span> Tennis</div>
+                <div class="leg-row"><span class="ldot blue"></span> Science</div>
+                <div class="leg-row"><span class="ldot red"></span> Center</div>
+            </div>
+        </section>
+    </div>
+</main>
+
+<footer class="app-footer">
+    Data shown may be sample/demo. For live events visit
+    <a href="https://www.meetup.com" target="_blank" rel="noopener">Meetup.com</a>.
+    &nbsp;|&nbsp; API: <code>/api/meetups</code> &nbsp;·&nbsp;
+    <code>/api/reminders</code> &nbsp;·&nbsp; <code>/api/status</code>
+</footer>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     Reminder Modal
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay hidden" id="reminder-modal" role="dialog" aria-modal="true">
+    <div class="modal-card">
+
+        <!-- Close button -->
+        <button class="modal-close" id="modal-close" aria-label="Close">
+            <i class="fas fa-xmark"></i>
+        </button>
+
+        <!-- Event info header (always visible) -->
+        <div class="modal-header" id="modal-header">
+            <div class="modal-bell-icon" id="modal-bell-icon">
+                <i class="fas fa-bell"></i>
+            </div>
+            <h3 id="modal-event-name">Event</h3>
+            <p id="modal-event-meta" class="modal-event-meta"></p>
+            <p id="modal-event-venue" class="modal-event-venue"></p>
+        </div>
+
+        <!-- ── Panel A: Set reminder form ─────────────────────────────────── -->
+        <div id="panel-form">
+            <p class="panel-label">Notify me via</p>
+
+            <div class="input-group">
+                <i class="fas fa-envelope field-icon"></i>
+                <input type="email" id="input-email" placeholder="Email address (optional)"
+                       autocomplete="email">
+            </div>
+            <div class="input-group">
+                <i class="fas fa-mobile-screen-button field-icon"></i>
+                <input type="tel" id="input-phone" placeholder="US phone for SMS (optional)"
+                       autocomplete="tel">
+            </div>
+
+            <p class="panel-label" style="margin-top:1.1rem">Remind me before the event</p>
+            <div class="interval-grid">
+                <label class="interval-opt">
+                    <input type="checkbox" name="interval" value="24" checked>
+                    <span class="interval-box">
+                        <i class="fas fa-clock"></i>
+                        <strong>24 hours</strong>
+                        <small>before</small>
+                    </span>
+                </label>
+                <label class="interval-opt">
+                    <input type="checkbox" name="interval" value="6" checked>
+                    <span class="interval-box">
+                        <i class="fas fa-clock"></i>
+                        <strong>6 hours</strong>
+                        <small>before</small>
+                    </span>
+                </label>
+                <label class="interval-opt">
+                    <input type="checkbox" name="interval" value="2" checked>
+                    <span class="interval-box">
+                        <i class="fas fa-clock"></i>
+                        <strong>2 hours</strong>
+                        <small>before</small>
+                    </span>
+                </label>
+            </div>
+
+            <p class="form-error hidden" id="form-error"></p>
+
+            <div class="modal-actions">
+                <button class="btn-modal-cancel" id="btn-modal-cancel">Cancel</button>
+                <button class="btn-modal-submit" id="btn-modal-submit">
+                    <i class="fas fa-bell"></i> Set Reminder
+                </button>
+            </div>
+        </div>
+
+        <!-- ── Panel B: Success ───────────────────────────────────────────── -->
+        <div id="panel-success" class="hidden">
+            <div class="success-state">
+                <div class="success-circle"><i class="fas fa-check"></i></div>
+                <h4>Reminder Set!</h4>
+                <p id="success-msg"></p>
+                <div class="success-channels" id="success-channels"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-modal-primary" id="btn-success-done">Done</button>
+            </div>
+        </div>
+
+        <!-- ── Panel C: Manage existing reminder ──────────────────────────── -->
+        <div id="panel-manage" class="hidden">
+            <div class="manage-state">
+                <div class="manage-icon"><i class="fas fa-bell"></i></div>
+                <h4>Reminder Active</h4>
+                <div class="manage-details" id="manage-details"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-modal-danger" id="btn-cancel-reminder">
+                    <i class="fas fa-bell-slash"></i> Cancel Reminder
+                </button>
+                <button class="btn-modal-primary" id="btn-manage-close">Close</button>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
