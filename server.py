@@ -43,6 +43,7 @@ TOPIC_EVENTS = {
         {'name': 'BioTech & Life Sciences Networking', 'scheduleType': 'monthly',      'weekday': 3, 'nth': 2,   'hour': 18, 'duration': 2, 'venue': '{city} Community Center',              'desc': 'Networking for biotech professionals, students, and curious minds.'},
         {'name': 'Astronomy & Stargazing Night',       'scheduleType': 'monthly_last', 'weekday': 4,             'hour': 20, 'duration': 3, 'venue': 'Regional Park (dark-sky site)',         'desc': 'Stargazing with club telescopes. Beginners always welcome.'},
         {'name': 'Nature & Ecology Walks',             'scheduleType': 'weekly',       'weekday': 2, 'hour': 18, 'duration': 2, 'venue': 'State Park Pavilion',                             'desc': 'Explore local ecology, geology, and wildlife with a naturalist guide.'},
+        {'name': 'Science News Weekly',                'scheduleType': 'weekly',       'weekday': 0, 'hour': 19, 'duration': 2, 'venue': '{city} Public Library',                           'desc': 'Weekly roundup and discussion of the latest science & research news.'},
     ],
     'hiking': [
         {'name': '{city} Trail Blazers',    'scheduleType': 'weekly',  'weekday': 6, 'hour': 8,  'duration': 4, 'venue': 'Trailhead Parking Lot',      'desc': 'Weekend morning hikes. Easy to moderate difficulty. Dogs welcome.'},
@@ -54,6 +55,7 @@ TOPIC_EVENTS = {
         {'name': 'AI & Machine Learning Group',    'scheduleType': 'biweekly',  'weekday': 1, 'hour': 19, 'duration': 2, 'venue': '{city} Public Library',           'desc': 'Collaborative learning on ML concepts, papers, and hands-on projects.'},
         {'name': 'Startup Founders Coffee',        'scheduleType': 'monthly',   'weekday': 5, 'nth': 1,  'hour': 9,  'duration': 2, 'venue': 'Local Coffee Shop',       'desc': 'Informal networking for startup founders and entrepreneurs. No pitch decks.'},
         {'name': '{city} Cyber & Security Talks',  'scheduleType': 'monthly',   'weekday': 3, 'nth': 3,  'hour': 18, 'duration': 2, 'venue': 'Tech Hub Conference Room', 'desc': 'Talks on cybersecurity, privacy, and digital safety for all experience levels.'},
+        {'name': 'Weekly Dev Showcase',            'scheduleType': 'weekly',    'weekday': 3, 'hour': 18, 'duration': 2, 'venue': 'Co-working Space',                'desc': 'Show and tell for developers — share what you built this week. All languages.'},
     ],
     'photography': [
         {'name': '{city} Photography Walk',      'scheduleType': 'weekly',  'weekday': 6, 'hour': 7,  'duration': 3, 'venue': 'Downtown Meeting Point', 'desc': 'Morning photo walks exploring local scenes. All cameras welcome.'},
@@ -69,6 +71,7 @@ TOPIC_EVENTS = {
         {'name': '{city} Book Club',             'scheduleType': 'monthly', 'weekday': 6, 'nth': 2,   'hour': 14, 'duration': 2, 'venue': '{city} Public Library', 'desc': 'Monthly fiction and non-fiction reads. New members welcome.'},
         {'name': 'Science Fiction Reading Group','scheduleType': 'monthly', 'weekday': 4, 'nth': 3,   'hour': 19, 'duration': 2, 'venue': 'Local Bookstore',         'desc': 'Deep dives into classic and contemporary sci-fi. Lively discussions.'},
         {'name': 'Writers Workshop',             'scheduleType': 'biweekly','weekday': 2, 'hour': 18, 'duration': 2, 'venue': 'Coffee Shop',             'desc': 'Supportive workshop for writers of all genres. Share excerpts and get feedback.'},
+        {'name': 'Weekend Reading Hour',         'scheduleType': 'weekly',  'weekday': 6, 'hour': 10, 'duration': 2, 'venue': 'Local Coffee Shop',        'desc': 'Casual Saturday reading session. Bring whatever you\'re currently reading.'},
     ],
     'music': [
         {'name': '{city} Open Mic Night',     'scheduleType': 'weekly',   'weekday': 4, 'hour': 19, 'duration': 3, 'venue': 'Local Venue Stage',   'desc': 'All musicians welcome. 10-minute slots. Sign up at the door.'},
@@ -203,7 +206,9 @@ def reverse_geocode(lat, lng):
         return {'lat': lat, 'lng': lng, 'city': 'Local', 'state': '', 'zip': ''}
 
 # ── Sample meetup generation ──────────────────────────────────────────────────
-def generate_sample_meetups(loc, radius_mi, topics):
+def generate_sample_meetups(loc, radius_mi, topics, days=7):
+    today  = date.today()
+    cutoff = today + timedelta(days=days)
     rand   = _make_rand(loc.get('zip') or f'{loc["lat"]:.2f}{loc["lng"]:.2f}')
     city   = loc.get('city', 'Local')
     state  = loc.get('state', '')
@@ -215,16 +220,21 @@ def generate_sample_meetups(loc, radius_mi, topics):
             continue
         color = TOPICS.get(topic, {}).get('color', '#64748b')
         for tmpl in TOPIC_EVENTS[topic]:
+            # Always advance rand for every template to keep positions deterministic
             plat, plng = _rand_point(loc['lat'], loc['lng'], radius_mi, rand)
+            members    = max(10, int(rand() * 180) + 15)
+            attending  = max(3,  int(rand() * min(members, 35)) + 3)
+
             dist = round(_haversine(loc['lat'], loc['lng'], plat, plng), 1)
-            if dist > radius_mi:
+            d    = _event_date(tmpl)
+
+            # Filter: must be within radius AND within the next `days` days
+            if dist > radius_mi or d > cutoff:
+                eid += 1
                 continue
 
-            d     = _event_date(tmpl)
             hour  = tmpl['hour']
             dt_s  = f"{d.isoformat()}T{hour:02d}:00:00{tz_off}"
-            members   = max(10, int(rand() * 180) + 15)
-            attending = max(3,  int(rand() * min(members, 35)) + 3)
 
             results.append({
                 'id':            eid,
@@ -558,11 +568,12 @@ class Handler(BaseHTTPRequestHandler):
                     live = fetch_live_events(t, loc['lat'], loc['lng'], radius)
                     if live: results.extend(live); source = 'live'
             if not results:
-                results = generate_sample_meetups(loc, radius, topic_list)
+                days = max(1, min(int(params.get('days', 7)), 30))
+                results = generate_sample_meetups(loc, radius, topic_list, days)
 
             self._send_json({
                 'source': source, 'meetups': results, 'count': len(results),
-                'location': loc,
+                'location': loc, 'days': days,
                 'fetchedAt': datetime.now(timezone.utc).isoformat()
             }); return
 

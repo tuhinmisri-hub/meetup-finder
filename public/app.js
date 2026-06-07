@@ -32,6 +32,8 @@ async function boot() {
         activeSort = e.target.value; renderAll();
     });
 
+    scheduleAutoRefresh();
+
     // Modal controls
     document.getElementById('modal-close').addEventListener('click', closeModal);
     document.getElementById('btn-modal-cancel').addEventListener('click', closeModal);
@@ -656,6 +658,48 @@ function escHtml(s) {
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Auto-refresh at 9 AM ET daily
+// ══════════════════════════════════════════════════════════════════════════════
+function msUntilNext9amET() {
+    const fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    });
+    const parts = fmt.formatToParts(new Date());
+    const h = parseInt(parts.find(p => p.type === 'hour').value);
+    const m = parseInt(parts.find(p => p.type === 'minute').value);
+    const s = parseInt(parts.find(p => p.type === 'second').value);
+    const secNow = h * 3600 + m * 60 + s;
+    const sec9am = 9 * 3600;
+    const secsUntil = secNow < sec9am ? sec9am - secNow : 86400 - secNow + sec9am;
+    return secsUntil * 1000;
+}
+
+function scheduleAutoRefresh() {
+    const ms   = msUntilNext9amET();
+    const next = new Date(Date.now() + ms);
+    const el   = document.getElementById('next-refresh-time');
+    if (el) el.textContent = next.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
+    document.getElementById('stat-refresh-wrap').style.display = '';
+
+    setTimeout(() => {
+        if (currentLoc) {
+            doSearch();
+            showAutoRefreshToast();
+        }
+        scheduleAutoRefresh();
+    }, ms);
+}
+
+function showAutoRefreshToast() {
+    const t = document.createElement('div');
+    t.className = 'auto-refresh-toast';
+    t.innerHTML = '<i class="fas fa-rotate-right"></i> Results refreshed — showing next 7 days';
+    document.body.appendChild(t);
+    setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 400); }, 3500);
+}
 
 // ── Start ──────────────────────────────────────────────────────────────────
 boot();
