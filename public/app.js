@@ -1,12 +1,13 @@
 'use strict';
 
-const LS_KEY = 'meetup_reminders_v1';
+const LS_KEY      = 'meetup_reminders_v1';
+const LS_RSVP_KEY = 'meetup_rsvps_v1';
 
 // ── App state ─────────────────────────────────────────────────────────────────
 let allMeetups   = [];
 let allTopics    = {};    // { id: {label, icon, color} }
 let activeFilter = 'all';
-let activeSort   = 'distance';
+let activeSort   = 'date';
 let currentLoc   = null; // { lat, lng, city, state, zip }
 let map, centerMarker, radiusCircle;
 let markers = [];
@@ -213,6 +214,7 @@ function sortedFiltered() {
         ? allMeetups
         : allMeetups.filter(m => m.topic === activeFilter);
     return [...base].sort((a, b) => {
+        if (activeSort === 'date')      return new Date(a.eventDatetime) - new Date(b.eventDatetime);
         if (activeSort === 'distance')  return a.distanceMi - b.distanceMi;
         if (activeSort === 'members')   return b.members - a.members;
         if (activeSort === 'attending') return b.attending - a.attending;
@@ -232,9 +234,10 @@ function renderCards(list) {
     }
 
     list.forEach(m => {
-        const color  = m.color || allTopics[m.topic]?.color || '#64748b';
-        const icon   = allTopics[m.topic]?.icon || 'fa-calendar';
-        const active = !!getActiveReminder(m.id);
+        const color     = m.color || allTopics[m.topic]?.color || '#64748b';
+        const icon      = allTopics[m.topic]?.icon || 'fa-calendar';
+        const active    = !!getActiveReminder(m.id);
+        const going     = getRsvp(m.id);
 
         const card = document.createElement('div');
         card.className = 'meetup-card';
@@ -252,9 +255,14 @@ function renderCards(list) {
                     <div class="card-title">${escHtml(m.name)}</div>
                     ${nextLabel}
                 </div>
-                <span class="topic-pill" style="--tc:${color}">
-                    <i class="fas ${icon}"></i> ${cap(m.topic)}
-                </span>
+                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:.3rem;flex-shrink:0">
+                    <span class="topic-pill" style="--tc:${color}">
+                        <i class="fas ${icon}"></i> ${cap(m.topic)}
+                    </span>
+                    <span class="going-badge${going ? '' : ' hidden'}">
+                        <i class="fas fa-circle-check"></i> Going
+                    </span>
+                </div>
             </div>
             <div class="card-meta">
                 ${timeRow}
@@ -266,7 +274,8 @@ function renderCards(list) {
                 <div class="members-row">
                     <i class="fas fa-users"></i> ${m.members} members
                     &nbsp;·&nbsp;
-                    <i class="fas fa-circle-check" style="color:#10b981"></i> ${m.attending} attending
+                    <i class="fas fa-circle-check" style="color:#10b981"></i>
+                    <span class="attending-count" data-base="${m.attending}">${going ? m.attending + 1 : m.attending}</span> attending
                 </div>
                 <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
                     <span class="dist-pill"><i class="fas fa-route"></i> ${m.distanceMi} mi</span>
@@ -274,20 +283,28 @@ function renderCards(list) {
                         <i class="fas fa-bell"></i>
                         ${active ? 'Reminder Set' : 'Remind Me'}
                     </button>
+                    <button class="btn-rsvp${going ? ' rsvp-active' : ''}" data-rsvp="${m.id}">
+                        ${going
+                            ? '<i class="fas fa-circle-check"></i> Going'
+                            : '<i class="far fa-circle-check"></i> Going?'}
+                    </button>
                     <a href="${escHtml(m.meetupUrl)}" target="_blank" rel="noopener"
                        class="view-link" style="--tc:${color}"
                        onclick="event.stopPropagation()">
-                        Meetup.com <i class="fas fa-arrow-up-right-from-square" style="font-size:.65em"></i>
+                        Sign Up <i class="fas fa-arrow-up-right-from-square" style="font-size:.65em"></i>
                     </a>
                 </div>
             </div>`;
 
         card.addEventListener('click', e => {
-            if (e.target.closest('.btn-remind') || e.target.closest('.view-link')) return;
+            if (e.target.closest('.btn-remind') || e.target.closest('.btn-rsvp') || e.target.closest('.view-link')) return;
             highlightCard(m.id); panToMeetup(m);
         });
         card.querySelector('.btn-remind').addEventListener('click', e => {
             e.stopPropagation(); openReminderModal(m);
+        });
+        card.querySelector('.btn-rsvp').addEventListener('click', e => {
+            e.stopPropagation(); toggleRsvp(m);
         });
         container.appendChild(card);
     });
@@ -373,6 +390,7 @@ function initMap() {
 }
 
 function updateMapCenter(loc, radiusMi) {
+    map.invalidateSize();
     if (centerMarker) { map.removeLayer(centerMarker); centerMarker = null; }
     if (radiusCircle) { map.removeLayer(radiusCircle); radiusCircle = null; }
 
@@ -437,6 +455,50 @@ function makeIcon(color) {
 // ══════════════════════════════════════════════════════════════════════════════
 // Reminder Modal
 // ══════════════════════════════════════════════════════════════════════════════
+// ── RSVP (Going) ──────────────────────────────────────────────────────────────
+function getRsvp(eventId) {
+    try { return !!JSON.parse(localStorage.getItem(LS_RSVP_KEY) || '{}')[eventId]; }
+    catch { return false; }
+}
+function setRsvp(eventId, going) {
+    const s = JSON.parse(localStorage.getItem(LS_RSVP_KEY) || '{}');
+    if (going) s[eventId] = true; else delete s[eventId];
+    localStorage.setItem(LS_RSVP_KEY, JSON.stringify(s));
+}
+
+function toggleRsvp(meetup) {
+    const going = !getRsvp(meetup.id);
+    setRsvp(meetup.id, going);
+    updateCardRsvp(meetup.id, going, meetup.attending);
+}
+
+function updateCardRsvp(eventId, going, baseAttending) {
+    const card = document.querySelector(`.meetup-card[data-id="${eventId}"]`);
+    if (!card) return;
+
+    const btn = card.querySelector('.btn-rsvp');
+    if (btn) {
+        btn.classList.toggle('rsvp-active', going);
+        btn.innerHTML = going
+            ? '<i class="fas fa-circle-check"></i> Going'
+            : '<i class="far fa-circle-check"></i> Going?';
+    }
+
+    // Update attending count optimistically
+    const attendEl = card.querySelector('.attending-count');
+    if (attendEl) {
+        const delta = going ? 1 : -1;
+        const current = parseInt(attendEl.dataset.base || baseAttending);
+        attendEl.dataset.base = current;
+        attendEl.textContent  = (current + delta).toString();
+    }
+
+    // Show/hide the Going badge in card header
+    const badge = card.querySelector('.going-badge');
+    if (badge) badge.classList.toggle('hidden', !going);
+}
+
+// ── Reminder localStorage ─────────────────────────────────────────────────────
 function getActiveReminder(eventId) {
     try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}')[eventId] || null; }
     catch { return null; }
@@ -628,6 +690,8 @@ function showResultsArea(show) {
         document.getElementById('loading-state').classList.remove('hidden');
         document.getElementById('error-state').classList.add('hidden');
         document.getElementById('cards').innerHTML = '';
+        // Let the DOM repaint before telling Leaflet its container is now visible
+        setTimeout(() => map && map.invalidateSize(), 0);
     }
 }
 

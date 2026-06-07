@@ -324,6 +324,27 @@ body {
     color: #fff;
 }
 
+/* ── Going badge (card header) ────────────────────────────────────────────── */
+.going-badge {
+    display: inline-flex; align-items: center; gap: .25rem;
+    background: #d1fae5; color: #065f46; border: 1px solid #6ee7b7;
+    border-radius: 50px; padding: .18rem .55rem;
+    font-size: .7rem; font-weight: 700;
+}
+
+/* ── RSVP / Going button ──────────────────────────────────────────────────── */
+.btn-rsvp {
+    display: inline-flex; align-items: center; gap: .3rem;
+    padding: .28rem .75rem; border-radius: 50px; border: 1.5px solid var(--border);
+    background: var(--surface); font-size: .78rem; font-weight: 600;
+    cursor: pointer; color: var(--muted); transition: all .18s; white-space: nowrap;
+}
+.btn-rsvp:hover { border-color: #6ee7b7; color: #065f46; background: #f0fdf4; }
+.btn-rsvp.rsvp-active {
+    background: #d1fae5; border-color: #6ee7b7; color: #065f46;
+}
+.btn-rsvp.rsvp-active i { color: #059669; }
+
 /* ── Remind Me button ─────────────────────────────────────────────────────── */
 .btn-remind {
     display: inline-flex; align-items: center; gap: .3rem;

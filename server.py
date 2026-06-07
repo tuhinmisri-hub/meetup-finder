@@ -254,9 +254,9 @@ def generate_sample_meetups(loc, radius_mi, topics, days=7):
                 'lng':           plng,
                 'description':   tmpl['desc'],
                 'meetupUrl':     (
-                    f'https://www.meetup.com/find/?keywords={urllib.parse.quote(topic)}'
+                    f'https://www.meetup.com/find/?keywords={urllib.parse.quote(tmpl["name"].replace("{city}", city))}'
                     f'&location={urllib.parse.quote(city)}%2C+{urllib.parse.quote(state)}'
-                    f'&source=EVENTS&distance={"fiveMiles" if radius_mi <= 5 else "tenMiles"}'
+                    f'&source=EVENTS'
                 ),
             })
             eid += 1
