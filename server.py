@@ -395,6 +395,27 @@ def _scheduler_loop():
         time.sleep(60)
 
 # ── SerpAPI Google Events ─────────────────────────────────────────────────────
+_geocode_cache = {}
+
+def _geocode_place(query):
+    """Geocode a place string using Nominatim. Results cached in memory."""
+    key = query.lower().strip()
+    if key in _geocode_cache:
+        return _geocode_cache[key]
+    url = f'https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(query)}&format=json&limit=1'
+    req = urllib.request.Request(url, headers={'User-Agent': 'EventFinder/1.0'})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        if data:
+            result = (float(data[0]['lat']), float(data[0]['lon']))
+            _geocode_cache[key] = result
+            return result
+    except Exception:
+        pass
+    _geocode_cache[key] = (None, None)
+    return (None, None)
+
 def _haversine(lat1, lon1, lat2, lon2):
     R = 3958.8
     p1, p2 = math.radians(lat1), math.radians(lat2)
@@ -474,8 +495,16 @@ def fetch_serpapi_events(topic, city, state, lat, lng, days=7):
             data = json.loads(resp.read())
         events_raw = data.get('events_results', [])
         color  = TOPICS.get(topic, {}).get('color', '#64748b')
-        rand   = _make_rand(f'{topic}{city}')
         cutoff = datetime.now(timezone.utc) + timedelta(days=days)
+        # Pre-geocode unique cities so map pins land in the right place
+        city_coords = {}
+        for ev in events_raw:
+            parts = ev.get('address') or []
+            city_key = parts[-1] if parts else ''
+            if city_key and city_key not in city_coords:
+                glat, glng = _geocode_place(city_key)
+                city_coords[city_key] = (glat, glng)
+                if glat: time.sleep(0.2)   # respect Nominatim 1 req/s limit
         results = []
         for ev in events_raw:
             when = (ev.get('date') or {}).get('when', '')
@@ -485,7 +514,10 @@ def fetch_serpapi_events(topic, city, state, lat, lng, days=7):
             address_parts = ev.get('address') or []
             venue_name    = address_parts[0] if address_parts else 'TBD'
             address_str   = ', '.join(address_parts[1:]) if len(address_parts) > 1 else location
-            plat, plng    = _rand_point(lat, lng, 3.0, rand)
+            city_key      = address_parts[-1] if address_parts else ''
+            glat, glng    = city_coords.get(city_key, (None, None))
+            plat          = glat if glat else lat
+            plng          = glng if glng else lng
             results.append({
                 'id':            f'serp_{topic}_{len(results)}',
                 'topic':         topic,
@@ -501,8 +533,8 @@ def fetch_serpapi_events(topic, city, state, lat, lng, days=7):
                 'distanceMi':    round(_haversine(lat, lng, plat, plng), 1),
                 'members':       0,
                 'attending':     0,
-                'lat':           plat,
-                'lng':           plng,
+                'lat':           round(plat, 4),
+                'lng':           round(plng, 4),
                 'meetupUrl':     ev.get('link', ''),
                 'thumbnail':     ev.get('thumbnail', ''),
             })
