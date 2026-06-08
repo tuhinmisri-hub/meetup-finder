@@ -272,17 +272,17 @@ function renderCards(list) {
                 ${timeRow}
                 <div class="meta-row"><i class="fas fa-location-dot"></i>${escHtml(m.venue)}</div>
                 <div class="meta-row"><i class="fas fa-map-pin"></i>${escHtml(m.address)}</div>
+                <div class="meta-row"><i class="fas fa-route"></i>${m.distanceMi} mi from your location</div>
             </div>
             <p class="desc-text">${escHtml(m.description || '')}</p>
             <div class="card-footer">
-                <div class="members-row">
+                ${m.members > 0 ? `<div class="members-row">
                     <i class="fas fa-users"></i> ${m.members} members
                     &nbsp;·&nbsp;
                     <i class="fas fa-circle-check" style="color:#10b981"></i>
                     <span class="attending-count" data-base="${m.attending}">${going ? m.attending + 1 : m.attending}</span> attending
-                </div>
+                </div>` : ''}
                 <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
-                    <span class="dist-pill"><i class="fas fa-route"></i> ${m.distanceMi} mi</span>
                     <button class="btn-remind${active ? ' bell-active' : ''}" data-remind="${m.id}">
                         <i class="fas fa-bell"></i>
                         ${active ? 'Reminder Set' : 'Remind Me'}
