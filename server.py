@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Meetup Finder — dynamic zip-based search with reminder scheduling."""
+"""Event Finder — dynamic zip-based search with reminder scheduling."""
 
-import json, os, re, math, mimetypes, base64, calendar, secrets
+import json, os, re, math, mimetypes, base64, calendar
 import urllib.request, urllib.error, urllib.parse
 import smtplib, uuid, threading, time
 from email.mime.multipart import MIMEMultipart
@@ -13,67 +13,7 @@ from datetime              import datetime, timezone, timedelta, date
 PORT           = int(os.environ.get('PORT', 3000))
 PUBLIC_DIR     = Path(__file__).parent / 'public'
 REMINDERS_FILE = Path(__file__).parent / 'reminders.json'
-TOKEN_FILE     = Path(__file__).parent / '.meetup_token.json'
-MEETUP_GQL     = 'https://api.meetup.com/gql'
 _lock          = threading.Lock()
-_oauth_states  = {}   # { state_token: timestamp } for CSRF protection
-
-# ── Meetup OAuth token management ────────────────────────────────────────────
-def load_token():
-    if TOKEN_FILE.exists():
-        try: return json.loads(TOKEN_FILE.read_text())
-        except: pass
-    return None
-
-def save_token(tok):
-    TOKEN_FILE.write_text(json.dumps(tok, indent=2))
-
-def _meetup_redirect_uri():
-    custom = os.environ.get('MEETUP_REDIRECT_URI', '').strip()
-    return custom or f'http://localhost:{PORT}/auth/callback'
-
-def _refresh_access_token(refresh_tok):
-    cid = os.environ.get('MEETUP_CLIENT_ID', '').strip()
-    sec = os.environ.get('MEETUP_CLIENT_SECRET', '').strip()
-    if not (cid and sec and refresh_tok): return None
-    data = urllib.parse.urlencode({
-        'client_id': cid, 'client_secret': sec,
-        'grant_type': 'refresh_token', 'refresh_token': refresh_tok,
-    }).encode()
-    req = urllib.request.Request('https://secure.meetup.com/oauth2/access', data=data,
-          headers={'Content-Type': 'application/x-www-form-urlencoded'}, method='POST')
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            r = json.loads(resp.read())
-        tok = {
-            'access_token':  r['access_token'],
-            'refresh_token': r.get('refresh_token', refresh_tok),
-            'expires_at':    time.time() + r.get('expires_in', 3600),
-        }
-        save_token(tok)
-        print('  [Meetup OAuth] Token refreshed')
-        return tok['access_token']
-    except Exception as exc:
-        print(f'  [Meetup OAuth] Refresh failed: {exc}')
-        return None
-
-def get_valid_token():
-    # 1. Try token file (local dev / recent auth)
-    tok = load_token()
-    if tok:
-        if time.time() < tok.get('expires_at', 0) - 300:
-            return tok['access_token']
-        new_tok = _refresh_access_token(tok.get('refresh_token', ''))
-        if new_tok: return new_tok
-
-    # 2. Refresh token from env var (Render / production)
-    env_refresh = os.environ.get('MEETUP_REFRESH_TOKEN', '').strip()
-    if env_refresh:
-        new_tok = _refresh_access_token(env_refresh)
-        if new_tok: return new_tok
-
-    # 3. Static access token (legacy fallback)
-    return os.environ.get('MEETUP_ACCESS_TOKEN', '').strip() or None
 
 # ── Topic catalogue ───────────────────────────────────────────────────────────
 TOPICS = {
@@ -313,9 +253,8 @@ def generate_sample_meetups(loc, radius_mi, topics, days=7):
                 'lng':           plng,
                 'description':   tmpl['desc'],
                 'meetupUrl':     (
-                    f'https://www.meetup.com/find/?keywords={urllib.parse.quote(tmpl["name"].replace("{city}", city))}'
-                    f'&location={urllib.parse.quote(city)}%2C+{urllib.parse.quote(state)}'
-                    f'&source=EVENTS'
+                    f'https://www.google.com/search?q={urllib.parse.quote(tmpl["name"].replace("{city}", city))}'
+                    f'+{urllib.parse.quote(city)}+events&ibp=htl;events'
                 ),
             })
             eid += 1
@@ -345,7 +284,7 @@ def _email_html(r, hours_before):
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',system-ui,sans-serif">
   <div style="max-width:560px;margin:28px auto;border-radius:14px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.1)">
     <div style="background:linear-gradient(135deg,#0f172a,#1e3a5f);color:#fff;padding:26px 28px">
-      <div style="font-size:1.05rem;opacity:.7;margin-bottom:4px">Meetup Finder</div>
+      <div style="font-size:1.05rem;opacity:.7;margin-bottom:4px">Event Finder</div>
       <div style="font-size:1.5rem;font-weight:800">🔔 Event Reminder</div>
     </div>
     <div style="background:#fff;padding:28px">
@@ -361,7 +300,7 @@ def _email_html(r, hours_before):
         <div style="color:#475569;font-size:.9rem">📍 {r['eventVenue']}</div>
       </div>
       <div style="color:#94a3b8;font-size:.78rem;border-top:1px solid #f1f5f9;padding-top:16px">
-        You set this reminder via Meetup Finder.
+        You set this reminder via Event Finder.
         To cancel, open the app and click the bell icon on this event.
       </div>
     </div>
@@ -380,7 +319,7 @@ def send_email(to_addr, subject, html_body, plain_body):
         return False
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
-    msg['From']    = f'Meetup Finder <{sender}>'
+    msg['From']    = f'Event Finder <{sender}>'
     msg['To']      = to_addr
     msg.attach(MIMEText(plain_body, 'plain'))
     msg.attach(MIMEText(html_body,  'html'))
@@ -455,24 +394,7 @@ def _scheduler_loop():
         except Exception as exc: print(f'  [Scheduler] Error: {exc}')
         time.sleep(60)
 
-# ── Live Meetup.com GraphQL ───────────────────────────────────────────────────
-GQL_QUERY = """
-query($query: String!, $lat: Float!, $lon: Float!, $radius: Float!) {
-  keywordSearch(
-    filter: { query: $query, lat: $lat, lon: $lon, radius: $radius, source: EVENTS }
-    input: { first: 20 }
-  ) {
-    edges { node { result {
-      ... on Event {
-        id title description dateTime eventUrl going
-        venue { name address city state lat lon }
-        group { name urlname memberships { count } }
-      }
-    }}}
-  }
-}
-"""
-
+# ── SerpAPI Google Events ─────────────────────────────────────────────────────
 def _haversine(lat1, lon1, lat2, lon2):
     R = 3958.8
     p1, p2 = math.radians(lat1), math.radians(lat2)
@@ -480,43 +402,107 @@ def _haversine(lat1, lon1, lat2, lon2):
          + math.cos(p1)*math.cos(p2)*math.sin(math.radians(lon2-lon1)/2)**2)
     return R * 2 * math.asin(math.sqrt(a))
 
-def fetch_live_events(topic, lat, lng, radius_miles):
-    token = get_valid_token()
-    if not token: return None
-    payload = json.dumps({'query': GQL_QUERY,
-                          'variables': {'query': topic, 'lat': lat,
-                                        'lon': lng, 'radius': radius_miles*1609.34}}).encode()
-    req = urllib.request.Request(MEETUP_GQL, data=payload,
-          headers={'Content-Type': 'application/json',
-                   'Authorization': f'Bearer {token}'}, method='POST')
+def _parse_serp_date(when_str):
+    """Parse SerpAPI 'when' string → (display_date, time_str, datetime_or_None)."""
+    if not when_str:
+        return '', '', None
+    time_match = re.search(r'(\d{1,2}:\d{2}\s*(?:AM|PM))', when_str, re.IGNORECASE)
+    time_str   = time_match.group(1).upper().replace(' ', '') if time_match else ''
+    now        = datetime.now()
+    months     = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
+                  'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
+    if 'today' in when_str.lower():
+        d = now.date()
+    elif 'tomorrow' in when_str.lower():
+        d = (now + timedelta(days=1)).date()
+    else:
+        m = re.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+(\d{1,2})',
+                      when_str, re.IGNORECASE)
+        if not m:
+            return when_str, time_str, None
+        mn, dy = months[m.group(1).lower()[:3]], int(m.group(2))
+        try:
+            d = date(now.year, mn, dy)
+            if d < now.date():
+                d = date(now.year + 1, mn, dy)
+        except ValueError:
+            return when_str, time_str, None
+    next_date = d.strftime('%a, %b %-d, %Y')
+    hour = 0
+    if time_match:
+        raw = time_match.group(1).strip()
+        h, rest = raw.split(':', 1)
+        ampm = rest[-2:].upper()
+        h = int(h)
+        if ampm == 'PM' and h != 12: h += 12
+        elif ampm == 'AM' and h == 12: h = 0
+        hour = h
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        dt = datetime(d.year, d.month, d.day, hour, tzinfo=timezone.utc)
+    except Exception:
+        dt = None
+    return next_date, time_str, dt
+
+def fetch_serpapi_events(topic, city, state, lat, lng, days=7):
+    key = os.environ.get('SERPAPI_KEY', '').strip()
+    if not key:
+        return None
+    location = f'{city}, {state}' if state else city
+    query    = f'{topic} events near {location}'
+    qs = urllib.parse.urlencode({
+        'engine':  'google_events',
+        'q':       query,
+        'api_key': key,
+        'hl':      'en',
+        'gl':      'us',
+    })
+    url = f'https://serpapi.com/search?{qs}'
+    req = urllib.request.Request(url, headers={'User-Agent': 'MeetupFinder/1.0'})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
             data = json.loads(resp.read())
-        edges = (data.get('data') or {}).get('keywordSearch', {}).get('edges', [])
+        events_raw = data.get('events_results', [])
+        color  = TOPICS.get(topic, {}).get('color', '#64748b')
+        rand   = _make_rand(f'{topic}{city}')
+        cutoff = datetime.now(timezone.utc) + timedelta(days=days)
         results = []
-        for edge in edges:
-            r = (edge.get('node') or {}).get('result') or {}
-            if not r.get('id'): continue
-            v = r.get('venue') or {}; g = r.get('group') or {}
-            vlat, vlon = v.get('lat', lat), v.get('lon', lng)
+        for ev in events_raw:
+            when = (ev.get('date') or {}).get('when', '')
+            next_date, time_str, event_dt = _parse_serp_date(when)
+            if event_dt and event_dt > cutoff:
+                continue
+            address_parts = ev.get('address') or []
+            venue_name    = address_parts[0] if address_parts else 'TBD'
+            address_str   = ', '.join(address_parts[1:]) if len(address_parts) > 1 else location
+            plat, plng    = _rand_point(lat, lng, 3.0, rand)
             results.append({
-                'id': r['id'], 'topic': topic,
-                'color': TOPICS.get(topic, {}).get('color', '#64748b'),
-                'name': r.get('title', ''),
-                'description': (r.get('description') or '')[:300],
-                'nextDate': r.get('dateTime',''), 'eventDatetime': r.get('dateTime',''),
-                'schedule': 'See event page', 'time': '',
-                'venue': v.get('name', 'TBD'),
-                'address': ', '.join(filter(None, [v.get('address'), v.get('city'), v.get('state')])),
-                'distanceMi': round(_haversine(lat, lng, vlat, vlon), 1),
-                'members': (g.get('memberships') or {}).get('count', 0),
-                'attending': r.get('going', 0),
-                'lat': vlat, 'lng': vlon,
-                'meetupUrl': r.get('eventUrl', f'https://www.meetup.com/{g.get("urlname","")}')
+                'id':            f'serp_{topic}_{len(results)}',
+                'topic':         topic,
+                'color':         color,
+                'name':          ev.get('title', 'Event'),
+                'description':   (ev.get('description') or '')[:300],
+                'nextDate':      next_date,
+                'eventDatetime': event_dt.isoformat() if event_dt else '',
+                'schedule':      'See event page',
+                'time':          time_str,
+                'venue':         venue_name,
+                'address':       address_str,
+                'distanceMi':    round(_haversine(lat, lng, plat, plng), 1),
+                'members':       0,
+                'attending':     0,
+                'lat':           plat,
+                'lng':           plng,
+                'meetupUrl':     ev.get('link', ''),
             })
+        print(f'  [SerpAPI] topic={topic} → {len(results)} events')
         return results or None
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors='replace')
+        print(f'  [SerpAPI] HTTP {exc.code} for topic={topic}: {body[:200]}')
+        return None
     except Exception as exc:
-        print(f'  [Meetup API] {exc}'); return None
+        print(f'  [SerpAPI] {exc}')
+        return None
 
 # ── HTTP handler ──────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
@@ -573,67 +559,13 @@ class Handler(BaseHTTPRequestHandler):
         path   = self.path.split('?')[0]
         params = self._qs(self.path)
 
-        # ── /auth/meetup → start OAuth ───────────────────────────────────────
-        if path == '/auth/meetup':
-            cid = os.environ.get('MEETUP_CLIENT_ID', '').strip()
-            if not cid:
-                self._send_json({'error': 'MEETUP_CLIENT_ID not configured'}, 503); return
-            state = secrets.token_urlsafe(16)
-            _oauth_states[state] = time.time()
-            qs = urllib.parse.urlencode({
-                'client_id': cid, 'response_type': 'code',
-                'redirect_uri': _meetup_redirect_uri(),
-                'scope': 'basic', 'state': state,
-            })
-            self._redirect(f'https://secure.meetup.com/oauth2/authorize?{qs}'); return
-
-        # ── /auth/callback → exchange code for tokens ─────────────────────
-        if path == '/auth/callback':
-            code  = params.get('code', '')
-            state = params.get('state', '')
-            if params.get('error') or not code:
-                self._redirect('/?auth=denied'); return
-            if state not in _oauth_states:
-                self._redirect('/?auth=invalid'); return
-            del _oauth_states[state]
-
-            cid = os.environ.get('MEETUP_CLIENT_ID', '').strip()
-            sec = os.environ.get('MEETUP_CLIENT_SECRET', '').strip()
-            data = urllib.parse.urlencode({
-                'client_id': cid, 'client_secret': sec,
-                'grant_type': 'authorization_code',
-                'code': code, 'redirect_uri': _meetup_redirect_uri(),
-            }).encode()
-            req = urllib.request.Request('https://secure.meetup.com/oauth2/access', data=data,
-                  headers={'Content-Type': 'application/x-www-form-urlencoded'}, method='POST')
-            try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    r = json.loads(resp.read())
-                tok = {
-                    'access_token':  r['access_token'],
-                    'refresh_token': r.get('refresh_token', ''),
-                    'expires_at':    time.time() + r.get('expires_in', 3600),
-                }
-                save_token(tok)
-                print('  [Meetup OAuth] Connected successfully')
-                self._redirect('/?auth=success'); return
-            except Exception as exc:
-                print(f'  [Meetup OAuth] Token exchange failed: {exc}')
-                self._redirect('/?auth=failed'); return
-
-        # ── /auth/disconnect ──────────────────────────────────────────────
-        if path == '/auth/disconnect':
-            if TOKEN_FILE.exists(): TOKEN_FILE.unlink()
-            self._redirect('/'); return
-
         # ── /api/auth/status ──────────────────────────────────────────────
         if path == '/api/auth/status':
-            tok      = load_token()
-            live_tok = get_valid_token()
+            token = os.environ.get('SERPAPI_KEY', '').strip()
             self._send_json({
-                'connected':    bool(live_tok),
-                'configured':   bool(os.environ.get('MEETUP_CLIENT_ID')),
-                'refreshToken': (tok or {}).get('refresh_token', ''),
+                'connected':  bool(token),
+                'configured': bool(token),
+                'source':     'serpapi',
             }); return
 
         # ── /api/topics ──────────────────────────────────────────────────────
@@ -663,7 +595,7 @@ class Handler(BaseHTTPRequestHandler):
         # ── /api/status ──────────────────────────────────────────────────────
         if path == '/api/status':
             self._send_json({
-                'liveApi':    bool(os.environ.get('MEETUP_ACCESS_TOKEN')),
+                'liveApi':    bool(os.environ.get('SERPAPI_KEY')),
                 'emailReady': bool(os.environ.get('SMTP_USER')),
                 'smsReady':   bool(os.environ.get('TWILIO_ACCOUNT_SID')),
                 'serverTime': datetime.now(timezone.utc).isoformat()
@@ -690,13 +622,16 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({'error': 'Invalid lat/lng'}, 400); return
                 loc = {'lat': lat, 'lng': lng, 'city': 'Local', 'state': '', 'zip': ''}
 
+            days   = max(1, min(int(params.get('days', 7)), 30))
             source, results = 'sample', []
-            if get_valid_token():
+            if os.environ.get('SERPAPI_KEY', '').strip():
                 for t in topic_list:
-                    live = fetch_live_events(t, loc['lat'], loc['lng'], radius)
+                    live = fetch_serpapi_events(
+                        t, loc.get('city', 'Local'), loc.get('state', ''),
+                        loc['lat'], loc['lng'], days
+                    )
                     if live: results.extend(live); source = 'live'
             if not results:
-                days = max(1, min(int(params.get('days', 7)), 30))
                 results = generate_sample_meetups(loc, radius, topic_list, days)
 
             self._send_json({
@@ -799,8 +734,8 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     threading.Thread(target=_scheduler_loop, daemon=True).start()
     httpd = HTTPServer(('0.0.0.0', PORT), Handler)
-    print(f'\n  Meetup Finder  →  http://localhost:{PORT}')
-    print(f'  Meetup API  : {"Live" if os.environ.get("MEETUP_ACCESS_TOKEN") else "Sample data (dynamic by zip)"}')
+    print(f'\n  Event Finder  →  http://localhost:{PORT}')
+    print(f'  SerpAPI     : {"Live (key set)" if os.environ.get("SERPAPI_KEY") else "Sample data (dynamic by zip)"}')
     print(f'  Email       : {"Ready (" + os.environ.get("SMTP_USER","") + ")" if os.environ.get("SMTP_USER") else "Not configured"}')
     print(f'  SMS         : {"Ready" if os.environ.get("TWILIO_ACCOUNT_SID") else "Not configured"}')
     print()

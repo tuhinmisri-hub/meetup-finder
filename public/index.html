@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Meetup Finder</title>
+    <title>Event Finder</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
     <link rel="stylesheet" href="/styles.css">
@@ -12,8 +12,8 @@
 
 <!-- ── Header ─────────────────────────────────────────────────────────────── -->
 <header class="app-header">
-    <h1><i class="fas fa-map-location-dot"></i> Meetup Finder</h1>
-    <p class="header-sub">Enter your zip code to discover local groups &amp; events near you</p>
+    <h1><i class="fas fa-map-location-dot"></i> Event Finder</h1>
+    <p class="header-sub">Enter your zip code to discover local events near you</p>
 
     <!-- Search form -->
     <div class="search-form" id="search-form">
@@ -92,7 +92,7 @@
     <!-- Prompt shown before first search -->
     <div id="prompt-state" class="prompt-state">
         <i class="fas fa-map-location-dot fa-3x"></i>
-        <h2>Find meetups near you</h2>
+        <h2>Find events near you</h2>
         <p>Enter a zip code above (or use your location) and pick the topics you're interested in.</p>
     </div>
 
@@ -101,7 +101,7 @@
 
         <div class="live-banner" id="live-banner">
             <div>
-                <strong><i class="fas fa-arrow-up-right-from-square"></i> Find Live Events on Meetup.com</strong>
+                <strong><i class="fas fa-arrow-up-right-from-square"></i> Find Live Events on Google</strong>
                 <span class="banner-sub" id="banner-location-label">Near your location</span>
             </div>
             <div class="banner-links" id="banner-links">
@@ -129,11 +129,11 @@
             <section class="cards-panel" id="cards-panel">
                 <div class="loading-state hidden" id="loading-state">
                     <i class="fas fa-circle-notch fa-spin fa-2x"></i>
-                    <p>Fetching meetups…</p>
+                    <p>Fetching events…</p>
                 </div>
                 <div class="error-state hidden" id="error-state">
                     <i class="fas fa-triangle-exclamation fa-2x"></i>
-                    <p id="error-msg">Could not load meetups.</p>
+                    <p id="error-msg">Could not load events.</p>
                     <button class="btn-retry" onclick="doSearch()">Try again</button>
                 </div>
                 <div id="cards"></div>
@@ -151,8 +151,7 @@
 </main>
 
 <footer class="app-footer">
-    Data shown may be sample/demo. For live events visit
-    <a href="https://www.meetup.com" target="_blank" rel="noopener">Meetup.com</a>.
+    Live events powered by <a href="https://www.eventbrite.com" target="_blank" rel="noopener">Eventbrite</a>.
     &nbsp;|&nbsp; API: <code>/api/meetups</code> &nbsp;·&nbsp;
     <code>/api/reminders</code> &nbsp;·&nbsp; <code>/api/geocode</code>
 </footer>
@@ -239,36 +238,6 @@
             </div>
         </div>
 
-    </div>
-</div>
-
-<!-- OAuth result banner (shown after redirect back from Meetup.com) -->
-<div id="auth-banner" class="auth-banner hidden"></div>
-
-<!-- Post-connect modal: shows refresh token for Render setup -->
-<div class="modal-overlay hidden" id="token-modal">
-    <div class="modal-card" style="max-width:520px">
-        <button class="modal-close" id="token-modal-close"><i class="fas fa-xmark"></i></button>
-        <div style="text-align:center;margin-bottom:1.25rem">
-            <div style="width:52px;height:52px;border-radius:50%;background:#d1fae5;color:#059669;display:flex;align-items:center;justify-content:center;font-size:1.4rem;margin:0 auto .85rem">
-                <i class="fas fa-circle-check"></i>
-            </div>
-            <h3 style="font-size:1.1rem;font-weight:800;margin-bottom:.3rem">Meetup.com Connected!</h3>
-            <p style="font-size:.85rem;color:#64748b">Live events will now appear when you search.</p>
-        </div>
-        <div id="token-render-section">
-            <p class="panel-label">Deploy to Render? Add these env vars</p>
-            <div class="token-block">
-                <div class="token-row"><span class="token-key">MEETUP_CLIENT_ID</span><span class="token-val" id="tv-cid"></span></div>
-                <div class="token-row"><span class="token-key">MEETUP_CLIENT_SECRET</span><span class="token-val token-secret">set in Render dashboard</span></div>
-                <div class="token-row"><span class="token-key">MEETUP_REFRESH_TOKEN</span><span class="token-val" id="tv-refresh"></span><button class="btn-copy" id="btn-copy-refresh" title="Copy"><i class="fas fa-copy"></i></button></div>
-                <div class="token-row"><span class="token-key">MEETUP_REDIRECT_URI</span><span class="token-val token-secret">https://your-app.onrender.com/auth/callback</span></div>
-            </div>
-            <p style="font-size:.75rem;color:#94a3b8;margin-top:.75rem">The refresh token lets Render auto-renew access without re-authenticating.</p>
-        </div>
-        <div class="modal-actions">
-            <button class="btn-modal-primary" id="token-modal-done">Got it</button>
-        </div>
     </div>
 </div>
 

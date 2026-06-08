@@ -255,7 +255,7 @@ body {
 }
 .hidden { display: none !important; }
 
-/* ── Meetup card ──────────────────────────────────────────────────────────── */
+/* ── Event card ───────────────────────────────────────────────────────────── */
 .meetup-card {
     background: var(--surface); border: 1.5px solid var(--border);
     border-radius: var(--r); padding: 1rem 1.1rem; cursor: pointer;
@@ -543,14 +543,7 @@ body {
 .manage-row { display: flex; align-items: center; gap: .4rem; }
 .manage-row i { width: 14px; text-align: center; color: #94a3b8; }
 
-/* ── Meetup.com auth ──────────────────────────────────────────────────────── */
-.btn-connect-meetup {
-    display: inline-flex; align-items: center; gap: .35rem;
-    background: #e63946; color: #fff; border-radius: 50px;
-    padding: .3rem .9rem; font-size: .78rem; font-weight: 700;
-    text-decoration: none; transition: background .2s; white-space: nowrap;
-}
-.btn-connect-meetup:hover { background: #c1121f; color: #fff; }
+/* ── Auth status ──────────────────────────────────────────────────────────── */
 
 .auth-disconnect {
     display: inline-flex; align-items: center;
