@@ -411,22 +411,33 @@ def _parse_serp_date(when_str):
     now        = datetime.now()
     months     = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
                   'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
+    weekdays   = {'mon':0,'tue':1,'wed':2,'thu':3,'fri':4,'sat':5,'sun':6}
+    d = None
     if 'today' in when_str.lower():
         d = now.date()
     elif 'tomorrow' in when_str.lower():
         d = (now + timedelta(days=1)).date()
     else:
+        # Try full month + day first: "Jun 14" / "June 14"
         m = re.search(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+(\d{1,2})',
                       when_str, re.IGNORECASE)
-        if not m:
-            return when_str, time_str, None
-        mn, dy = months[m.group(1).lower()[:3]], int(m.group(2))
-        try:
-            d = date(now.year, mn, dy)
-            if d < now.date():
-                d = date(now.year + 1, mn, dy)
-        except ValueError:
-            return when_str, time_str, None
+        if m:
+            mn, dy = months[m.group(1).lower()[:3]], int(m.group(2))
+            try:
+                d = date(now.year, mn, dy)
+                if d < now.date():
+                    d = date(now.year + 1, mn, dy)
+            except ValueError:
+                pass
+        # Fall back to weekday name: "Tue", "Saturday"
+        if not d:
+            wd = re.search(r'\b(mon|tue|wed|thu|fri|sat|sun)\w*\b', when_str, re.IGNORECASE)
+            if wd:
+                wd_num = weekdays[wd.group(1).lower()[:3]]
+                delta  = (wd_num - now.weekday()) % 7 or 7
+                d = now.date() + timedelta(days=delta)
+    if not d:
+        return when_str, time_str, None
     next_date = d.strftime('%a, %b %-d, %Y')
     hour = 0
     if time_match:
