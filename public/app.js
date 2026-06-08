@@ -245,7 +245,7 @@ function renderCards(list) {
         card.dataset.id = m.id;
 
         const isLive = m.schedule === 'See event page';
-        const nextLabel = m.nextDate
+        const nextLabel = (!isLive && m.nextDate)
             ? `<span class="next-chip"><i class="fas fa-calendar" style="font-size:.62rem"></i> ${m.nextDate}</span>` : '';
         const timeRow = isLive
             ? `<div class="meta-row"><i class="fas fa-calendar-days"></i>${escHtml(m.nextDate || 'Date TBD')}${m.time ? ' &middot; ' + escHtml(m.time) : ''}</div>`

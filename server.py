@@ -644,6 +644,15 @@ class Handler(BaseHTTPRequestHandler):
                     if live: results.extend(live); source = 'live'
             if not results:
                 results = generate_sample_meetups(loc, radius, topic_list, days)
+            else:
+                # Deduplicate by name + date (recurring events appear multiple times)
+                seen, deduped = set(), []
+                for r in results:
+                    key = (r['name'].lower().strip(), r.get('nextDate', ''))
+                    if key not in seen:
+                        seen.add(key)
+                        deduped.append(r)
+                results = deduped
 
             self._send_json({
                 'source': source, 'meetups': results, 'count': len(results),
