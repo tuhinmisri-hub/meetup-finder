@@ -504,6 +504,7 @@ def fetch_serpapi_events(topic, city, state, lat, lng, days=7):
                 'lat':           plat,
                 'lng':           plng,
                 'meetupUrl':     ev.get('link', ''),
+                'thumbnail':     ev.get('thumbnail', ''),
             })
         print(f'  [SerpAPI] topic={topic} → {len(results)} events')
         return results or None

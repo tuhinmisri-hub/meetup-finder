@@ -253,7 +253,11 @@ function renderCards(list) {
                 ? `<div class="meta-row"><i class="fas fa-clock"></i>${escHtml(m.schedule)} &middot; ${escHtml(m.time)}</div>`
                 : `<div class="meta-row"><i class="fas fa-calendar-days"></i>${escHtml(m.schedule)}</div>`);
 
+        const thumbHtml = m.thumbnail
+            ? `<img class="card-thumb" src="${escHtml(m.thumbnail)}" alt="" loading="lazy" onerror="this.style.display='none'">` : '';
+
         card.innerHTML = `
+            ${thumbHtml}
             <div class="card-top">
                 <div>
                     <div class="card-title">${escHtml(m.name)}</div>

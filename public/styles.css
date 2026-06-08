@@ -258,9 +258,19 @@ body {
 /* ── Event card ───────────────────────────────────────────────────────────── */
 .meetup-card {
     background: var(--surface); border: 1.5px solid var(--border);
-    border-radius: var(--r); padding: 1rem 1.1rem; cursor: pointer;
+    border-radius: var(--r); padding: 0; cursor: pointer; overflow: hidden;
     transition: transform .15s, box-shadow .15s, border-color .15s;
 }
+.card-thumb {
+    width: 100%; height: 160px; object-fit: cover; display: block;
+    border-bottom: 1px solid var(--border);
+}
+.meetup-card .card-top,
+.meetup-card .card-meta,
+.meetup-card .desc-text,
+.meetup-card .card-footer { padding-left: 1.1rem; padding-right: 1.1rem; }
+.meetup-card .card-top    { padding-top: 1rem; }
+.meetup-card .card-footer { padding-bottom: 1rem; }
 .meetup-card:hover {
     transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.09);
     border-color: #94a3b8;
