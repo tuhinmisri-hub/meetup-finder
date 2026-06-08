@@ -536,7 +536,7 @@ def fetch_serpapi_events(topic, city, state, lat, lng, days=7):
                 'lat':           round(plat, 4),
                 'lng':           round(plng, 4),
                 'meetupUrl':       ev.get('link', ''),
-                'thumbnail':       ev.get('thumbnail', ''),
+                'thumbnail':       t if (t := ev.get('thumbnail', '')) and not t.startswith('https://www.google.com/maps/') else '',
                 'mapImage':        ((ev.get('event_location_map') or {}).get('image', '')),
                 'mapLink':         ((ev.get('event_location_map') or {}).get('link', '')),
             })
