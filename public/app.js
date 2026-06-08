@@ -276,6 +276,11 @@ function renderCards(list) {
                 ${timeRow}
                 <div class="meta-row"><i class="fas fa-location-dot"></i>${escHtml(m.venue)}</div>
                 <div class="meta-row"><i class="fas fa-map-pin"></i>${escHtml(m.address)}</div>
+                ${m.mapImage ? `<a href="${escHtml(m.mapLink || '#')}" target="_blank" rel="noopener"
+                    class="card-map-preview" onclick="event.stopPropagation()" title="Open in Google Maps">
+                    <img src="${escHtml(m.mapImage)}" alt="Map" loading="lazy" onerror="this.parentElement.style.display='none'">
+                    <span class="map-directions-label"><i class="fas fa-diamond-turn-right"></i> Directions</span>
+                </a>` : ''}
             </div>
             <p class="desc-text">${escHtml(m.description || '')}</p>
             <div class="card-footer">

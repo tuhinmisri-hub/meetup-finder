@@ -271,6 +271,23 @@ body {
 .meetup-card .card-footer { padding-left: 1.1rem; padding-right: 1.1rem; }
 .meetup-card .card-top    { padding-top: 1rem; }
 .meetup-card .card-footer { padding-bottom: 1rem; }
+
+.card-map-preview {
+    display: block; position: relative; margin: .6rem 1.1rem .2rem;
+    border-radius: 8px; overflow: hidden; border: 1px solid var(--border);
+    text-decoration: none; flex-shrink: 0;
+}
+.card-map-preview img {
+    width: 100%; height: 110px; object-fit: cover; display: block;
+    filter: saturate(1.1);
+}
+.map-directions-label {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,.55));
+    color: #fff; font-size: .75rem; font-weight: 700;
+    padding: .5rem .7rem .35rem; display: flex; align-items: center; gap: .3rem;
+}
+.card-map-preview:hover img { filter: saturate(1.3) brightness(1.05); }
 .meetup-card:hover {
     transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.09);
     border-color: #94a3b8;
