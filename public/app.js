@@ -276,7 +276,6 @@ function renderCards(list) {
                 ${timeRow}
                 <div class="meta-row"><i class="fas fa-location-dot"></i>${escHtml(m.venue)}</div>
                 <div class="meta-row"><i class="fas fa-map-pin"></i>${escHtml(m.address)}</div>
-                <div class="meta-row"><i class="fas fa-route"></i>${m.distanceMi} mi from your location</div>
             </div>
             <p class="desc-text">${escHtml(m.description || '')}</p>
             <div class="card-footer">
