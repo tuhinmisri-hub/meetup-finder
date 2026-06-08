@@ -35,6 +35,12 @@
                 <option value="10">10 miles</option>
                 <option value="25">25 miles</option>
             </select>
+            <select id="date-range-select" class="radius-select">
+                <option value="7">Next 7 days</option>
+                <option value="1">Today</option>
+                <option value="14">Next 2 weeks</option>
+                <option value="30">Next 30 days</option>
+            </select>
             <button class="btn-search" id="btn-search">
                 <i class="fas fa-magnifying-glass"></i> Search
             </button>
@@ -46,6 +52,16 @@
             <div class="topic-checks" id="topic-checks">
                 <!-- populated by JS -->
                 <span class="topics-loading"><i class="fas fa-circle-notch fa-spin"></i></span>
+            </div>
+        </div>
+
+        <!-- Custom keyword row -->
+        <div class="custom-topic-row">
+            <span class="topics-label">Custom:</span>
+            <div class="custom-topic-wrap">
+                <i class="fas fa-keyboard custom-topic-icon"></i>
+                <input type="text" id="custom-topic-input" maxlength="80"
+                       placeholder="Any topic, e.g. yoga, salsa, art fair">
             </div>
         </div>
 

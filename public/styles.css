@@ -132,6 +132,31 @@ body {
 }
 .topic-check-label:hover .topic-chip { border-color: rgba(255,255,255,.5); }
 
+/* ── Custom keyword row ───────────────────────────────────────────────────── */
+.custom-topic-row {
+    display: flex; align-items: center; gap: .6rem;
+    flex-wrap: wrap; justify-content: center;
+}
+.custom-topic-wrap {
+    position: relative; display: flex; align-items: center;
+}
+.custom-topic-icon {
+    position: absolute; left: .75rem;
+    color: rgba(255,255,255,.5); font-size: .78rem; pointer-events: none;
+}
+#custom-topic-input {
+    padding: .45rem .9rem .45rem 2.1rem;
+    border: 1.5px solid rgba(255,255,255,.35);
+    border-radius: 50px; background: rgba(255,255,255,.12);
+    color: #fff; font-size: .82rem; width: 260px;
+    font-family: inherit; transition: border-color .2s, background .2s;
+}
+#custom-topic-input::placeholder { color: rgba(255,255,255,.4); }
+#custom-topic-input:focus {
+    outline: none; border-color: rgba(255,255,255,.7);
+    background: rgba(255,255,255,.2);
+}
+
 /* ── Location chip (shows resolved city) ──────────────────────────────────── */
 .location-chip {
     display: inline-flex; align-items: center; gap: .4rem;

@@ -27,6 +27,9 @@ async function boot() {
     document.getElementById('zip-input').addEventListener('keydown', e => {
         if (e.key === 'Enter') doSearch();
     });
+    document.getElementById('custom-topic-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') doSearch();
+    });
     document.getElementById('btn-locate').addEventListener('click', useMyLocation);
     document.getElementById('btn-refresh').addEventListener('click', doSearch);
     document.getElementById('sort-select').addEventListener('change', e => {
@@ -83,8 +86,11 @@ function renderTopicCheckboxes() {
 }
 
 function getSelectedTopics() {
-    return Array.from(document.querySelectorAll('input[name="topic"]:checked'))
-                .map(cb => cb.value);
+    const preset = Array.from(document.querySelectorAll('input[name="topic"]:checked'))
+                       .map(cb => cb.value);
+    const raw    = document.getElementById('custom-topic-input').value || '';
+    const custom = raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    return [...preset, ...custom];
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -132,6 +138,7 @@ async function useMyLocation() {
     btn.disabled = true;
     lbl.textContent = 'Detecting…';
 
+    const geoOpts = { timeout: 15000, maximumAge: 60000, enableHighAccuracy: false };
     navigator.geolocation.getCurrentPosition(
         async pos => {
             const { latitude: lat, longitude: lng } = pos.coords;
@@ -160,9 +167,14 @@ async function useMyLocation() {
         err => {
             btn.disabled = false;
             lbl.textContent = 'Use my location';
-            alert('Could not get your location. Please enter a zip code manually.');
+            const msgs = {
+                1: 'Location access was denied. On iPhone, go to Settings > Safari > Location and allow access, then try again.',
+                2: 'Your location could not be determined. Please enter a zip code instead.',
+                3: 'Location request timed out. Please enter a zip code instead.',
+            };
+            alert(msgs[err.code] || 'Could not get your location. Please enter a zip code manually.');
         },
-        { timeout: 10000 }
+        geoOpts
     );
 }
 
@@ -170,12 +182,14 @@ async function fetchAndRender(radius, topics) {
     if (!currentLoc) return;
     setLoadingState(true);
 
+    const days = parseInt(document.getElementById('date-range-select').value) || 7;
     const params = new URLSearchParams({
         zip:    currentLoc.zip || '',
         lat:    currentLoc.lat,
         lng:    currentLoc.lng,
         radius: radius,
         topics: topics.join(','),
+        days,
     });
 
     try {
@@ -338,11 +352,13 @@ function renderFilterTabs(selectedTopics) {
     wrap.appendChild(allBtn);
 
     selectedTopics.forEach(tid => {
-        const t = allTopics[tid]; if (!t) return;
+        const t     = allTopics[tid];
+        const icon  = t?.icon  || 'fa-calendar';
+        const label = t?.label || cap(tid);
         const btn = document.createElement('button');
         btn.className = 'ftab';
         btn.dataset.topic = tid;
-        btn.innerHTML = `<i class="fas ${t.icon}"></i> ${t.label} <span class="ftab-count" id="cnt-${tid}">—</span>`;
+        btn.innerHTML = `<i class="fas ${icon}"></i> ${label} <span class="ftab-count" id="cnt-${tid}">—</span>`;
         wrap.appendChild(btn);
     });
 
